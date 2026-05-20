@@ -11,7 +11,7 @@ from pydantic import BaseModel
 # 1. Structured Logging Configuration (Production-grade observability)
 logging.basicConfig(
     level=logging.INFO,
-    format='{"timestamp": "%(asctime)s", "level": "%(levelname)s", "module": "%(name)s", "message": "%(message)s"}'
+    format='{"timestamp": "%(asctime)s", "level": "%(levelname)s", "module": "%(name)s", "message": "%(message)s"}',
 )
 logger = logging.getLogger("api")
 
@@ -34,11 +34,10 @@ class InvoiceIngestResponse(BaseModel):
 # 3. Centralized Global Exception Handlers (Security & Separation of Concerns)
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    logger.warning(f"HTTP error occurred: status_code={exc.status_code} detail={exc.detail}")
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail}
+    logger.warning(
+        f"HTTP error occurred: status_code={exc.status_code} detail={exc.detail}"
     )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
 @app.exception_handler(Exception)
@@ -46,7 +45,7 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
     logger.error("Unhandled server exception", exc_info=exc)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "An unexpected error occurred in the server."}
+        content={"detail": "An unexpected error occurred in the server."},
     )
 
 
@@ -56,51 +55,52 @@ def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post(
-    "/ap/invoices/ingest",
-    status_code=status.HTTP_201_CREATED,
-    tags=["invoices"]
-)
+@app.post("/ap/invoices/ingest", status_code=status.HTTP_201_CREATED, tags=["invoices"])
 async def ingest_invoice(
     file: Annotated[
-        UploadFile, 
-        File(description="The invoice file to ingest (.xml, .pdf, .csv, .xlsx)")
-    ]
+        UploadFile,
+        File(description="The invoice file to ingest (.xml, .pdf, .csv, .xlsx)"),
+    ],
 ) -> InvoiceIngestResponse:
     ext = Path(file.filename).suffix.lower()
-    
+
     # 1. Strictly validate the file extension (Semantic 415 error)
     if ext not in ALLOWED_EXTENSIONS:
         logger.warning(f"Rejected file {file.filename}: unsupported format {ext}")
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"Unsupported format: {ext}. Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
+            detail=f"Unsupported format: {ext}. Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}",
         )
-    
+
     content = await file.read()
-    
+
     # 2. Strictly validate the payload size (Semantic 413 error)
     if len(content) > MAX_SIZE_BYTES:
-        logger.warning(f"Rejected file {file.filename}: file size exceeds 10MB limit ({len(content)} bytes)")
+        logger.warning(
+            f"Rejected file {file.filename}: file size exceeds 10MB limit ({len(content)} bytes)"
+        )
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"Maximum allowed size is 10MB. Got {len(content) / 1024 / 1024:.2f}MB"
+            detail=f"Maximum allowed size is 10MB. Got {len(content) / 1024 / 1024:.2f}MB",
         )
-    
+
     # 3. Generate tracking UUID v4 for end-to-end traceability
     invoice_id = str(uuid.uuid4())
     logger.info(f"Successfully ingested invoice {file.filename} with ID: {invoice_id}")
-    
+
     return InvoiceIngestResponse(
         invoice_id=invoice_id,
         filename=file.filename,
         size_bytes=len(content),
         status="received",
-        received_at=datetime.now(timezone.utc)  # Timezone-aware UTC datetime (Python 3.12+ best practice)
+        received_at=datetime.now(
+            timezone.utc
+        ),  # Timezone-aware UTC datetime (Python 3.12+ best practice)
     )
 
 
 def dev():
     """Entry point for `uv run dev`."""
     import uvicorn
+
     uvicorn.run("src.api.main:app", reload=True)
