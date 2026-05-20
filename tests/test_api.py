@@ -69,6 +69,8 @@ def test_ingest_valid_xml():
     assert "invoice_id" in data
     assert data["filename"] == "invoice.xml"
     assert data["status"] == "received"
+    assert "content_hash" in data
+    assert len(data["content_hash"]) == 64
     assert "parsed_invoice" in data
     
     parsed = data["parsed_invoice"]
@@ -104,3 +106,12 @@ def test_ingest_payload_too_large():
     
     assert response.status_code == 413
     assert "Maximum allowed size is 10MB" in response.json()["detail"]
+
+
+XXE_PAYLOAD = """<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><Invoice>&xxe;</Invoice>"""
+
+
+def test_xxe_blocked():
+    files = {"file": ("xxe.xml", io.BytesIO(XXE_PAYLOAD.encode()), "text/xml")}
+    response = client.post("/ap/invoices/ingest", files=files)
+    assert response.status_code == 422

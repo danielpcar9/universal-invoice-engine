@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -29,6 +30,7 @@ class InvoiceIngestResponse(BaseModel):
     invoice_id: str
     filename: str
     size_bytes: int
+    content_hash: str
     status: str
     received_at: datetime
     parsed_invoice: Optional[ParsedInvoice] = None
@@ -85,6 +87,7 @@ async def ingest_invoice(
         )
 
     content = await file.read()
+    content_hash = hashlib.sha256(content).hexdigest()
 
     # 2. Strictly validate the payload size (Semantic 413 error)
     if len(content) > MAX_SIZE_BYTES:
@@ -119,6 +122,7 @@ async def ingest_invoice(
         status="received",
         received_at=datetime.now(timezone.utc),
         parsed_invoice=parsed_invoice,
+        content_hash=content_hash,
     )
 
 
@@ -126,4 +130,4 @@ def dev():
     """Entry point for `uv run dev`."""
     import uvicorn
 
-    uvicorn.run("src.api.main:app", reload=True)
+    uvicorn.run("src.api.main:app", host="0.0.0.0", port=8000, reload=True)
