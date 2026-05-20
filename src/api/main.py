@@ -2,11 +2,13 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+from src.services.peppol_parser import PeppolParser, ParsedInvoice
 
 # 1. Structured Logging Configuration (Production-grade observability)
 logging.basicConfig(
@@ -29,6 +31,7 @@ class InvoiceIngestResponse(BaseModel):
     size_bytes: int
     status: str
     received_at: datetime
+    parsed_invoice: Optional[ParsedInvoice] = None
 
 
 # 3. Centralized Global Exception Handlers (Security & Separation of Concerns)
@@ -62,11 +65,20 @@ async def ingest_invoice(
         File(description="The invoice file to ingest (.xml, .pdf, .csv, .xlsx)"),
     ],
 ) -> InvoiceIngestResponse:
-    ext = Path(file.filename).suffix.lower()
+
+    filename = file.filename
+    if not filename:
+        logger.warning("Rejected file: no filename provided")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Filename is required",
+        )
+
+    ext = Path(filename).suffix.lower()
 
     # 1. Strictly validate the file extension (Semantic 415 error)
     if ext not in ALLOWED_EXTENSIONS:
-        logger.warning(f"Rejected file {file.filename}: unsupported format {ext}")
+        logger.warning(f"Rejected file {filename}: unsupported format {ext}")
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=f"Unsupported format: {ext}. Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}",
@@ -77,25 +89,36 @@ async def ingest_invoice(
     # 2. Strictly validate the payload size (Semantic 413 error)
     if len(content) > MAX_SIZE_BYTES:
         logger.warning(
-            f"Rejected file {file.filename}: file size exceeds 10MB limit ({len(content)} bytes)"
+            f"Rejected file {filename}: file size exceeds 10MB limit ({len(content)} bytes)"
         )
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"Maximum allowed size is 10MB. Got {len(content) / 1024 / 1024:.2f}MB",
         )
 
-    # 3. Generate tracking UUID v4 for end-to-end traceability
+    # 3. Parse XML payload if it's a PEPPOL BIS 3.0 invoice
+    parsed_invoice = None
+    if ext == ".xml":
+        try:
+            parsed_invoice = PeppolParser.parse(content)
+        except ValueError as e:
+            logger.warning(f"XML parsing failed for {filename}: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"XML invoice parsing failed: {str(e)}",
+            )
+
+    # 4. Generate tracking UUID v4 for end-to-end traceability
     invoice_id = str(uuid.uuid4())
-    logger.info(f"Successfully ingested invoice {file.filename} with ID: {invoice_id}")
+    logger.info(f"Successfully ingested invoice {filename} with ID: {invoice_id}")
 
     return InvoiceIngestResponse(
         invoice_id=invoice_id,
-        filename=file.filename,
+        filename=filename,
         size_bytes=len(content),
         status="received",
-        received_at=datetime.now(
-            timezone.utc
-        ),  # Timezone-aware UTC datetime (Python 3.12+ best practice)
+        received_at=datetime.now(timezone.utc),
+        parsed_invoice=parsed_invoice,
     )
 
 
