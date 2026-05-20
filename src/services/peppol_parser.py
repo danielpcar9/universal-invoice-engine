@@ -2,7 +2,7 @@ import logging
 from decimal import Decimal
 from typing import Optional
 
-from lxml import etree
+from lxml import etree  # type: ignore
 from pydantic import BaseModel
 
 logger = logging.getLogger("api")
