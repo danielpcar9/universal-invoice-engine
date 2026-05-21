@@ -1,6 +1,6 @@
 from decimal import Decimal
 import pytest
-from src.services.peppol_parser import PeppolParser
+from src.services.ap.peppol_parser import PeppolParser
 
 # Mock content for a valid PEPPOL BIS 3.0 (UBL 2.1) invoice XML
 VALID_PEPPOL_XML = """<?xml version="1.0" encoding="UTF-8"?>

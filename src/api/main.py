@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from src.services.peppol_parser import PeppolParser, ParsedInvoice
+from src.services.ap.peppol_parser import PeppolParser, ParsedInvoice
 
 # 1. Structured Logging Configuration (Production-grade observability)
 logging.basicConfig(
