@@ -3,11 +3,12 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from src.services.peppol_parser import PeppolParser, ParsedInvoice
 
@@ -33,7 +34,7 @@ class InvoiceIngestResponse(BaseModel):
     content_hash: str
     status: str
     received_at: datetime
-    parsed_invoice: Optional[ParsedInvoice] = None
+    parsed_invoice: ParsedInvoice | None = None
 
 
 # 3. Centralized Global Exception Handlers (Security & Separation of Concerns)
@@ -60,7 +61,12 @@ def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/ap/invoices/ingest", status_code=status.HTTP_201_CREATED, tags=["invoices"])
+@app.post(
+    "/api/v1/ap/invoices/ingest",
+    status_code=status.HTTP_201_CREATED,
+    tags=["accounts-payable"],
+    summary="Ingest an Accounts Payable invoice",
+)
 async def ingest_invoice(
     file: Annotated[
         UploadFile,
@@ -103,7 +109,7 @@ async def ingest_invoice(
     parsed_invoice = None
     if ext == ".xml":
         try:
-            parsed_invoice = PeppolParser.parse(content)
+            parsed_invoice = await run_in_threadpool(PeppolParser.parse, content)
         except ValueError as e:
             logger.warning(f"XML parsing failed for {filename}: {str(e)}")
             raise HTTPException(
