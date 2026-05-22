@@ -13,12 +13,10 @@ from src.services.ap.peppol_parser import PeppolParser, ParsedInvoice
 
 logger = logging.getLogger("api.invoices")
 
-# Ingestion configuration limits and allowed formats
 ALLOWED_EXTENSIONS = {".xml", ".pdf", ".csv", ".xlsx"}
 MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
 
 
-# Pydantic Models (Canonical Request/Response)
 class InvoiceIngestResponse(BaseModel):
     invoice_id: str
     filename: str
@@ -29,7 +27,7 @@ class InvoiceIngestResponse(BaseModel):
     parsed_invoice: ParsedInvoice | None = None
 
 
-router = APIRouter(prefix="/api/v1/ap/invoices", tags=["accounts-payable"])
+router = APIRouter(prefix="/ap/invoices", tags=["accounts-payable"])
 
 
 @router.post(
@@ -43,7 +41,6 @@ async def ingest_invoice(
         File(description="The invoice file to ingest (.xml, .pdf, .csv, .xlsx)"),
     ],
 ) -> InvoiceIngestResponse:
-
     filename = file.filename
     if not filename:
         logger.warning("Rejected file: no filename provided")
@@ -54,7 +51,6 @@ async def ingest_invoice(
 
     ext = Path(filename).suffix.lower()
 
-    # 1. Strictly validate the file extension (Semantic 415 error)
     if ext not in ALLOWED_EXTENSIONS:
         logger.warning(f"Rejected file {filename}: unsupported format {ext}")
         raise HTTPException(
@@ -65,7 +61,6 @@ async def ingest_invoice(
     content = await file.read()
     content_hash = hashlib.sha256(content).hexdigest()
 
-    # 2. Strictly validate the payload size (Semantic 413 error)
     if len(content) > MAX_SIZE_BYTES:
         logger.warning(
             f"Rejected file {filename}: file size exceeds 10MB limit ({len(content)} bytes)"
@@ -75,7 +70,6 @@ async def ingest_invoice(
             detail=f"Maximum allowed size is 10MB. Got {len(content) / 1024 / 1024:.2f}MB",
         )
 
-    # 3. Parse XML payload if it's a PEPPOL BIS 3.0 invoice
     parsed_invoice = None
     if ext == ".xml":
         try:
@@ -87,7 +81,6 @@ async def ingest_invoice(
                 detail=f"XML invoice parsing failed: {str(e)}",
             )
 
-    # 4. Generate tracking UUID v4 for end-to-end traceability
     invoice_id = str(uuid.uuid4())
     logger.info(f"Successfully ingested invoice {filename} with ID: {invoice_id}")
 
