@@ -373,6 +373,56 @@ Why this project uses it:
 
 > Invoice data can vary by format and country. JSONB lets us store canonical invoice data flexibly while still using Postgres.
 
+### UUID vs Auto-Increment IDs
+
+Auto-increment IDs look like this:
+
+```text
+1, 2, 3, 4, 5
+```
+
+They are simple in one database because the database can always hand out the next number.
+
+The problem appears in distributed systems:
+
+```text
+Database A gives ID 10
+Database B also gives ID 10
+collision
+```
+
+To avoid coordination problems, this project uses UUIDs:
+
+```python
+id: Mapped[uuid.UUID] = mapped_column(
+    UUID(as_uuid=True),
+    primary_key=True,
+    default=uuid.uuid4,
+)
+```
+
+Feynman version:
+
+> Auto-increment IDs require one authority to hand out the next number. UUIDs can be generated independently by each API instance without asking a central counter.
+
+Why this project uses UUIDs:
+
+> For the MVP, auto-increment would work. But UUIDs are a low-cost choice that avoid future coordination issues if invoice ingestion becomes distributed.
+
+What this project does not need:
+
+```text
+Snowflake IDs
+central ticket server
+custom distributed ID generator
+```
+
+Those are useful at massive scale, but overkill for this MVP.
+
+Interview answer:
+
+> I use UUIDs instead of auto-increment IDs because they avoid coordination problems in future distributed ingestion. I do not need Snowflake IDs at this stage; UUIDs are simpler and good enough for this system.
+
 ### raw_hash
 
 SHA-256 hash of the original uploaded file.
@@ -715,6 +765,89 @@ In this project:
 ```text
 Same invoice raw_hash twice -> one DB row, second request gets duplicate response
 ```
+
+Feynman version:
+
+> Idempotency means retries are safe. If the client sends the same operation again because of a timeout, the system should not accidentally create duplicate side effects.
+
+Example:
+
+```text
+Client uploads invoice.xml
+Server saves invoice
+Network fails before client receives response
+Client retries upload
+System recognizes it and avoids creating a duplicate invoice
+```
+
+Related concepts in this project:
+
+```text
+raw_hash deduplication
+Idempotency-Key
+```
+
+`raw_hash` answers:
+
+```text
+Have I seen this exact file before?
+```
+
+`Idempotency-Key` answers:
+
+```text
+Have I already processed this exact client request before?
+```
+
+Difference:
+
+```text
+raw_hash = identity of the file
+idempotency key = identity of the operation
+```
+
+For the MVP:
+
+> `raw_hash UNIQUE` is enough for file-based invoice deduplication.
+
+For future payment operations:
+
+> Add explicit `Idempotency-Key` support, especially for SEPA generation, because payment-related retries must not create duplicate side effects.
+
+### Idempotency-Key
+
+A client-provided unique key that identifies one write operation.
+
+Usually sent as an HTTP header:
+
+```text
+Idempotency-Key: 6f4c1b8e-9a2d-4a33-a07f-123456789abc
+```
+
+Why it matters:
+
+> If the client retries the same request after a timeout, the server can return the original result instead of performing the operation again.
+
+In this project, it is most useful for future endpoints like:
+
+```text
+POST /api/v1/ap/invoices/ingest
+POST /api/v1/ap/payments/sepa/generate
+```
+
+It is especially important for payment generation:
+
+```text
+Without idempotency key:
+same retry -> possible duplicate payment file
+
+With idempotency key:
+same retry -> same response, no duplicate side effect
+```
+
+Interview answer:
+
+> For invoice upload, I use `raw_hash` because the uploaded file itself has a stable identity. For payment generation, I would add explicit `Idempotency-Key` support because the operation, not just the input file, needs retry protection.
 
 ### Observability
 
