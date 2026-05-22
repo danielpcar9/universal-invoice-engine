@@ -4,6 +4,9 @@ from src.api.main import app
 
 client = TestClient(app)
 
+TEST_API_KEY = "test-api-key-placeholder"
+AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+
 # Re-use the valid XML payload from parser tests
 VALID_XML_CONTENT = """<?xml version="1.0" encoding="UTF-8"?>
 <Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
@@ -62,7 +65,9 @@ def test_health_check():
 
 def test_ingest_valid_xml():
     files = {"file": ("invoice.xml", io.BytesIO(VALID_XML_CONTENT.encode("utf-8")), "text/xml")}
-    response = client.post("/api/v1/ap/invoices/ingest", files=files)
+    response = client.post(
+        "/api/v1/ap/invoices/ingest", files=files, headers=AUTH_HEADERS
+    )
     
     assert response.status_code == 201
     data = response.json()
@@ -84,7 +89,9 @@ def test_ingest_valid_xml():
 
 def test_ingest_malformed_xml():
     files = {"file": ("invoice.xml", io.BytesIO(MALFORMED_XML_CONTENT.encode("utf-8")), "text/xml")}
-    response = client.post("/api/v1/ap/invoices/ingest", files=files)
+    response = client.post(
+        "/api/v1/ap/invoices/ingest", files=files, headers=AUTH_HEADERS
+    )
     
     assert response.status_code == 422
     assert "XML invoice parsing failed" in response.json()["detail"]
@@ -92,7 +99,9 @@ def test_ingest_malformed_xml():
 
 def test_ingest_unsupported_extension():
     files = {"file": ("invoice.txt", io.BytesIO(b"dummy plain text"), "text/plain")}
-    response = client.post("/api/v1/ap/invoices/ingest", files=files)
+    response = client.post(
+        "/api/v1/ap/invoices/ingest", files=files, headers=AUTH_HEADERS
+    )
     
     assert response.status_code == 415
     assert "Unsupported format" in response.json()["detail"]
@@ -102,7 +111,9 @@ def test_ingest_payload_too_large():
     # Max size is 10MB. We send 11MB
     large_payload = b"A" * (11 * 1024 * 1024)
     files = {"file": ("invoice.pdf", io.BytesIO(large_payload), "application/pdf")}
-    response = client.post("/api/v1/ap/invoices/ingest", files=files)
+    response = client.post(
+        "/api/v1/ap/invoices/ingest", files=files, headers=AUTH_HEADERS
+    )
     
     assert response.status_code == 413
     assert "Maximum allowed size is 10MB" in response.json()["detail"]
@@ -113,5 +124,7 @@ XXE_PAYLOAD = """<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:/
 
 def test_xxe_blocked():
     files = {"file": ("xxe.xml", io.BytesIO(XXE_PAYLOAD.encode()), "text/xml")}
-    response = client.post("/api/v1/ap/invoices/ingest", files=files)
+    response = client.post(
+        "/api/v1/ap/invoices/ingest", files=files, headers=AUTH_HEADERS
+    )
     assert response.status_code == 422

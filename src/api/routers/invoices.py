@@ -5,10 +5,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
+from src.api.dependencies.auth import verify_api_key
 from src.services.ap.peppol_parser import PeppolParser, ParsedInvoice
 
 logger = logging.getLogger("api.invoices")
@@ -27,7 +28,11 @@ class InvoiceIngestResponse(BaseModel):
     parsed_invoice: ParsedInvoice | None = None
 
 
-router = APIRouter(prefix="/ap/invoices", tags=["accounts-payable"])
+router = APIRouter(
+    prefix="/ap/invoices",
+    tags=["accounts-payable"],
+    dependencies=[Depends(verify_api_key)],
+)
 
 
 @router.post(
