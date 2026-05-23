@@ -6,15 +6,20 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+asyncpg://uie_app:uie_password@localhost:5432/universal_invoice_engine",
 )
 
+_engine_kwargs: dict = {"pool_pre_ping": True}
+if os.getenv("TESTING") == "1":
+    _engine_kwargs["poolclass"] = NullPool
+
 engine = create_async_engine(
     DATABASE_URL,
-    pool_pre_ping=True,
+    **_engine_kwargs,
 )
 
 AsyncSessionLocal = async_sessionmaker(

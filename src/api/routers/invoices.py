@@ -1,15 +1,20 @@
 import hashlib
 import logging
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from src.api.dependencies.auth import verify_api_key
+from src.db.session import get_db_session
+from src.repositories.invoice_repository import (
+    DuplicateInvoiceError,
+    insert_invoice,
+)
 from src.services.ap.peppol_parser import PeppolParser, ParsedInvoice
 
 logger = logging.getLogger("api.invoices")
@@ -45,6 +50,7 @@ async def ingest_invoice(
         UploadFile,
         File(description="The invoice file to ingest (.xml, .pdf, .csv, .xlsx)"),
     ],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> InvoiceIngestResponse:
     filename = file.filename
     if not filename:
@@ -86,7 +92,33 @@ async def ingest_invoice(
                 detail=f"XML invoice parsing failed: {str(e)}",
             )
 
-    invoice_id = str(uuid.uuid4())
+    canonical_data = (
+        parsed_invoice.model_dump(mode="json")
+        if parsed_invoice
+        else {"filename": filename, "source_format": ext.lstrip(".")}
+    )
+
+    try:
+        stored_invoice = await insert_invoice(
+            session,
+            raw_hash=content_hash,
+            filename=filename,
+            source_format=ext.lstrip("."),
+            canonical_data=canonical_data,
+        )
+    except DuplicateInvoiceError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Invoice already ingested",
+                "raw_hash": e.raw_hash,
+                "existing_invoice_id": str(e.existing_invoice_id)
+                if e.existing_invoice_id
+                else None,
+            },
+        )
+
+    invoice_id = str(stored_invoice.id)
     logger.info(f"Successfully ingested invoice {filename} with ID: {invoice_id}")
 
     return InvoiceIngestResponse(

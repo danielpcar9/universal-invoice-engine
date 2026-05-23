@@ -68,7 +68,7 @@ def test_ingest_valid_xml():
     response = client.post(
         "/api/v1/ap/invoices/ingest", files=files, headers=AUTH_HEADERS
     )
-    
+
     assert response.status_code == 201
     data = response.json()
     assert "invoice_id" in data
@@ -77,7 +77,7 @@ def test_ingest_valid_xml():
     assert "content_hash" in data
     assert len(data["content_hash"]) == 64
     assert "parsed_invoice" in data
-    
+
     parsed = data["parsed_invoice"]
     assert parsed["invoice_id"] == "INV-2026-0001"
     assert parsed["supplier_name"] == "Supplier Ltd"
@@ -85,6 +85,25 @@ def test_ingest_valid_xml():
     assert parsed["total_amount"] == "1200.00"
     assert parsed["subtotal"] == "1000.00"
     assert parsed["tax_amount"] == "200.00"
+
+
+def test_ingest_duplicate_xml_returns_409():
+    files = {"file": ("invoice.xml", io.BytesIO(VALID_XML_CONTENT.encode("utf-8")), "text/xml")}
+    first_response = client.post(
+        "/api/v1/ap/invoices/ingest", files=files, headers=AUTH_HEADERS
+    )
+    assert first_response.status_code == 201
+    first_invoice_id = first_response.json()["invoice_id"]
+    content_hash = first_response.json()["content_hash"]
+
+    duplicate_response = client.post(
+        "/api/v1/ap/invoices/ingest", files=files, headers=AUTH_HEADERS
+    )
+    assert duplicate_response.status_code == 409
+    detail = duplicate_response.json()["detail"]
+    assert detail["message"] == "Invoice already ingested"
+    assert detail["raw_hash"] == content_hash
+    assert detail["existing_invoice_id"] == first_invoice_id
 
 
 def test_ingest_malformed_xml():
