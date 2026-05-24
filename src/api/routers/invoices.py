@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
@@ -46,6 +46,7 @@ router = APIRouter(
     summary="Ingest an Accounts Payable invoice",
 )
 async def ingest_invoice(
+    request: Request,
     file: Annotated[
         UploadFile,
         File(description="The invoice file to ingest (.xml, .pdf, .csv, .xlsx)"),
@@ -68,6 +69,24 @@ async def ingest_invoice(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=f"Unsupported format: {ext}. Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}",
         )
+
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_SIZE_BYTES:
+                logger.warning(
+                    f"Rejected file {filename}: Content-Length exceeds 10MB limit "
+                    f"({content_length} bytes)"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                    detail=(
+                        f"Maximum allowed size is 10MB. "
+                        f"Got {int(content_length) / 1024 / 1024:.2f}MB"
+                    ),
+                )
+        except (ValueError, TypeError):
+            logger.warning(f"Malformed Content-Length header: {content_length}")
 
     content = await file.read()
     content_hash = hashlib.sha256(content).hexdigest()
