@@ -1,7 +1,7 @@
 [project]
 name = "universal-invoice-engine"
 version = "0.1.0"
-description = "Add your description here"
+description = "Backend API-first for AP/AR automation — PEPPOL, SEPA, CAMT.054"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

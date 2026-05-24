@@ -57,6 +57,16 @@ VALID_XML_CONTENT = """<?xml version="1.0" encoding="UTF-8"?>
 MALFORMED_XML_CONTENT = "<Invoice><cbc:ID>123</cbc:ID>"
 
 
+def _invoice_upload_files() -> dict:
+    return {
+        "file": (
+            "invoice.xml",
+            io.BytesIO(VALID_XML_CONTENT.encode("utf-8")),
+            "text/xml",
+        )
+    }
+
+
 def test_health_check():
     response = client.get("/api/v1/health")
     assert response.status_code == 200
@@ -88,16 +98,15 @@ def test_ingest_valid_xml():
 
 
 def test_ingest_duplicate_xml_returns_409():
-    files = {"file": ("invoice.xml", io.BytesIO(VALID_XML_CONTENT.encode("utf-8")), "text/xml")}
     first_response = client.post(
-        "/api/v1/ap/invoices/ingest", files=files, headers=AUTH_HEADERS
+        "/api/v1/ap/invoices/ingest", files=_invoice_upload_files(), headers=AUTH_HEADERS
     )
     assert first_response.status_code == 201
     first_invoice_id = first_response.json()["invoice_id"]
     content_hash = first_response.json()["content_hash"]
 
     duplicate_response = client.post(
-        "/api/v1/ap/invoices/ingest", files=files, headers=AUTH_HEADERS
+        "/api/v1/ap/invoices/ingest", files=_invoice_upload_files(), headers=AUTH_HEADERS
     )
     assert duplicate_response.status_code == 409
     detail = duplicate_response.json()["detail"]
