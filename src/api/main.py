@@ -4,7 +4,7 @@ import uuid
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
-from src.api.routers import invoices, system
+from src.api.routers import invoices, payments, system
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,6 +56,7 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
 
 app.include_router(system.router, prefix="/api/v1")
 app.include_router(invoices.router, prefix="/api/v1")
+app.include_router(payments.router, prefix="/api/v1")
 
 
 def dev():

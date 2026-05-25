@@ -34,6 +34,18 @@
             </cac:PartyTaxScheme>
         </cac:Party>
     </cac:AccountingCustomerParty>
+
+    <cac:PaymentMeans>
+    <cbc:PaymentMeansCode>58</cbc:PaymentMeansCode>
+    <cac:PayeeFinancialAccount>
+      <cbc:ID schemeID="IBAN">FR1420041010050500013M02606</cbc:ID>
+      <cac:FinancialInstitutionBranch>
+        <cac:FinancialInstitution>
+          <cbc:ID schemeID="BIC">SOGEFRPP</cbc:ID>
+        </cac:FinancialInstitution>
+      </cac:FinancialInstitutionBranch>
+    </cac:PayeeFinancialAccount>
+  </cac:PaymentMeans>
     
     <cac:LegalMonetaryTotal>
         <cbc:LineExtensionAmount currencyID="EUR">1000.00</cbc:LineExtensionAmount>

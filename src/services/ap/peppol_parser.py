@@ -22,6 +22,8 @@ class ParsedInvoice(BaseModel):
     total_amount: Decimal
     tax_amount: Decimal
     subtotal: Decimal
+    creditor_iban: Optional[str] = None
+    creditor_bic: Optional[str] = None
 
 
 class PeppolParser:
@@ -117,6 +119,15 @@ class PeppolParser:
             elif tax_inclusive_str and tax_exclusive_str:
                 tax_amount = Decimal(tax_inclusive_str) - Decimal(tax_exclusive_str)
 
+                        # ── PaymentMeans: IBAN / BIC del proveedor (acreedor) ──
+            creditor_iban = xpath_text(
+                "//cac:PaymentMeans/cac:PayeeFinancialAccount/cbc:ID/text()"
+            )
+            creditor_bic = xpath_text(
+                "//cac:PaymentMeans/cac:PayeeFinancialAccount/cac:FinancialInstitutionBranch/"
+                "cac:FinancialInstitution/cbc:ID/text()"
+            )
+
             # 6. Strict validation on critical financial nodes
             if not invoice_id:
                 raise ValueError("Missing critical Invoice ID (<cbc:ID>)")
@@ -141,6 +152,8 @@ class PeppolParser:
                 total_amount=total_amount,
                 tax_amount=tax_amount,
                 subtotal=subtotal,
+                creditor_iban=creditor_iban if creditor_iban else None,
+                creditor_bic=creditor_bic if creditor_bic else None,
             )
 
         except etree.XMLSyntaxError as e:

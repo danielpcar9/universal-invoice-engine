@@ -167,3 +167,7 @@ test.xml
 
 # macOS system files
 .DS_Store
+
+# IDE / local tools
+.antigravitycli/
+.idea/
