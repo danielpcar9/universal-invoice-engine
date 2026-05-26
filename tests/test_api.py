@@ -2,6 +2,9 @@ import io
 from fastapi.testclient import TestClient
 from src.api.main import app
 
+from decimal import Decimal
+
+
 client = TestClient(app)
 
 TEST_API_KEY = "test-api-key-placeholder"
@@ -156,3 +159,139 @@ def test_xxe_blocked():
         "/api/v1/ap/invoices/ingest", files=files, headers=AUTH_HEADERS
     )
     assert response.status_code == 422
+
+
+
+
+def test_sepa_generate_from_invoice_id():
+    # 1. Ingest a valid XML with PaymentMeans
+    xml_with_payment = """<?xml version="1.0" encoding="UTF-8"?>
+<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
+         xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+         xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+  <cbc:ID>SEP-INV-001</cbc:ID>
+  <cbc:IssueDate>2026-05-20</cbc:IssueDate>
+  <cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>
+  <cac:AccountingSupplierParty>
+    <cac:Party>
+      <cac:PartyName><cbc:Name>Acme Supplies</cbc:Name></cac:PartyName>
+      <cac:PartyTaxScheme><cbc:CompanyID>ESB1234567</cbc:CompanyID></cac:PartyTaxScheme>
+    </cac:Party>
+  </cac:AccountingSupplierParty>
+  <cac:AccountingCustomerParty>
+    <cac:Party>
+      <cac:PartyName><cbc:Name>My Company</cbc:Name></cac:PartyName>
+    </cac:Party>
+  </cac:AccountingCustomerParty>
+  <cac:PaymentMeans>
+    <cbc:PaymentMeansCode>58</cbc:PaymentMeansCode>
+    <cac:PayeeFinancialAccount>
+      <cbc:ID schemeID="IBAN">ES9121000418450200051332</cbc:ID>
+      <cac:FinancialInstitutionBranch>
+        <cac:FinancialInstitution>
+          <cbc:ID schemeID="BIC">CAIXESBB</cbc:ID>
+        </cac:FinancialInstitution>
+      </cac:FinancialInstitutionBranch>
+    </cac:PayeeFinancialAccount>
+  </cac:PaymentMeans>
+  <cac:TaxTotal>
+    <cbc:TaxAmount currencyID="EUR">21.00</cbc:TaxAmount>
+  </cac:TaxTotal>
+  <cac:LegalMonetaryTotal>
+    <cbc:TaxExclusiveAmount currencyID="EUR">100.00</cbc:TaxExclusiveAmount>
+    <cbc:TaxInclusiveAmount currencyID="EUR">121.00</cbc:TaxInclusiveAmount>
+    <cbc:PayableAmount currencyID="EUR">121.00</cbc:PayableAmount>
+  </cac:LegalMonetaryTotal>
+</Invoice>
+"""
+
+    files = {
+        "file": ("sepa_invoice.xml", io.BytesIO(xml_with_payment.encode("utf-8")), "text/xml")
+    }
+    ingest_response = client.post(
+        "/api/v1/ap/invoices/ingest", files=files, headers=AUTH_HEADERS
+    )
+    assert ingest_response.status_code == 201
+    invoice_id = ingest_response.json()["invoice_id"]
+    parsed = ingest_response.json()["parsed_invoice"]
+    assert parsed["creditor_iban"] == "ES9121000418450200051332"
+    assert parsed["creditor_bic"] == "CAIXESBB"
+
+    # 2. Generate SEPA from that invoice
+    payload = {
+        "invoice_id": invoice_id,
+        "debtor_name": "My Company S.L.",
+        "debtor_iban": "ES7921000813610123456789",
+        "debtor_bic": "BBVAESMM",
+        "requested_execution_date": "2026-05-25",
+    }
+    sepa_response = client.post(
+        "/api/v1/ap/payments/sepa/generate",
+        json=payload,
+        headers=AUTH_HEADERS,
+    )
+    assert sepa_response.status_code == 201
+    data = sepa_response.json()
+    assert data["invoice_id"] == invoice_id
+    assert data["amount"] == "121.00"
+    assert data["currency"] == "EUR"
+    assert data["creditor_iban"] == "ES9121000418450200051332"
+
+    # 3. Basic XML structure validation of the generated payload
+    xml_payload = data["xml_payload"]
+    assert "pain.001.001.03" in xml_payload
+    assert "<MsgId>" in xml_payload
+    assert "<CtrlSum>121.00</CtrlSum>" in xml_payload
+    assert "<InstdAmt Ccy=\"EUR\">121.00</InstdAmt>" in xml_payload
+    assert "ES9121000418450200051332" in xml_payload  # Creditor IBAN
+    assert "CAIXESBB" in xml_payload  # Creditor BIC
+    assert "ES7921000813610123456789" in xml_payload  # Debtor IBAN
+
+
+def test_sepa_generate_missing_creditor_iban():
+    # Invoice without PaymentMeans -> no creditor_iban
+    xml_no_payment = """<?xml version="1.0" encoding="UTF-8"?>
+<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
+         xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+         xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+  <cbc:ID>NO-PAY-001</cbc:ID>
+  <cbc:IssueDate>2026-05-20</cbc:IssueDate>
+  <cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>
+  <cac:AccountingSupplierParty>
+    <cac:Party>
+      <cac:PartyName><cbc:Name>No Bank Supplier</cbc:Name></cac:PartyName>
+    </cac:Party>
+  </cac:AccountingSupplierParty>
+  <cac:AccountingCustomerParty>
+    <cac:Party>
+      <cac:PartyName><cbc:Name>My Company</cbc:Name></cac:PartyName>
+    </cac:Party>
+  </cac:AccountingCustomerParty>
+  <cac:LegalMonetaryTotal>
+    <cbc:PayableAmount currencyID="EUR">50.00</cbc:PayableAmount>
+  </cac:LegalMonetaryTotal>
+</Invoice>
+"""
+
+    files = {
+        "file": ("no_bank.xml", io.BytesIO(xml_no_payment.encode("utf-8")), "text/xml")
+    }
+    ingest = client.post(
+        "/api/v1/ap/invoices/ingest", files=files, headers=AUTH_HEADERS
+    )
+    assert ingest.status_code == 201
+    invoice_id = ingest.json()["invoice_id"]
+    assert ingest.json()["parsed_invoice"]["creditor_iban"] is None
+
+    payload = {
+        "invoice_id": invoice_id,
+        "debtor_name": "My Company",
+        "debtor_iban": "ES7921000813610123456789",
+    }
+    sepa = client.post(
+        "/api/v1/ap/payments/sepa/generate",
+        json=payload,
+        headers=AUTH_HEADERS,
+    )
+    assert sepa.status_code == 422
+    assert "missing creditor_iban" in sepa.json()["detail"]
