@@ -19,6 +19,7 @@ logger = logging.getLogger("services.invoice")
 
 # ─── Excepciones de Dominio ───
 
+
 class InvoiceServiceError(Exception):
     """Base exception for invoice service errors."""
     pass
@@ -28,16 +29,18 @@ class UnsupportedFormatError(InvoiceServiceError):
     def __init__(self, extension: str, allowed: list[str]):
         self.extension = extension
         self.allowed = allowed
-        super().__init__(
-            f"Unsupported format: {extension}. Allowed formats: {', '.join(allowed)}"
-        )
 
+        super().__init__(
+            f"Unsupported format: {extension}. "
+            f"Allowed formats: {', '.join(allowed)}"
+        )
 
 
 class FileTooLargeError(InvoiceServiceError):
     def __init__(self, actual_bytes: int, max_bytes: int):
         self.actual_bytes = actual_bytes
         self.max_bytes = max_bytes
+
         super().__init__(
             f"Maximum allowed size is {max_bytes / 1024 / 1024:.0f}MB. "
             f"Got {actual_bytes / 1024 / 1024:.2f}MB"
@@ -55,10 +58,18 @@ class InvalidInvoiceError(InvoiceServiceError):
 
 class DuplicateInvoiceError(InvoiceServiceError):
     """Raised when trying to ingest an already existing invoice."""
-    def __init__(self, raw_hash: str, existing_invoice_id: str | None = None):
+
+    def __init__(
+        self,
+        raw_hash: str,
+        existing_invoice_id: str | None = None,
+    ):
         self.raw_hash = raw_hash
         self.existing_invoice_id = existing_invoice_id
-        super().__init__(f"Invoice with hash {raw_hash} already exists")
+
+        super().__init__(
+            f"Invoice with hash {raw_hash} already exists"
+        )
 
 
 class MissingIbanError(InvoiceServiceError):
@@ -68,9 +79,11 @@ class MissingIbanError(InvoiceServiceError):
 
 # ─── Modelos de Resultado ───
 
+
 @dataclass
 class InvoiceIngestResult:
     """Resultado de la ingestión de una factura."""
+
     invoice_id: str
     filename: str
     size_bytes: int
@@ -83,6 +96,7 @@ class InvoiceIngestResult:
 @dataclass
 class SepaGenerateResult:
     """Resultado de la generación de un archivo SEPA."""
+
     payment_id: str
     invoice_id: str
     xml_payload: str
@@ -94,13 +108,20 @@ class SepaGenerateResult:
 
 # ─── Servicio Principal ───
 
+
 class InvoiceService:
     """
     Orquesta todo el flujo de ingestión de facturas y generación SEPA.
     Contiene TODAS las reglas de negocio: formatos, tamaños, parsing.
     """
-    
-    ALLOWED_EXTENSIONS = {".xml", ".pdf", ".csv", ".xlsx"}
+
+    ALLOWED_EXTENSIONS = {
+        ".xml",
+        ".pdf",
+        ".csv",
+        ".xlsx",
+    }
+
     MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
 
     def __init__(self, session):
@@ -108,20 +129,34 @@ class InvoiceService:
 
     async def ingest(self, file: UploadFile) -> InvoiceIngestResult:
         """Punto de entrada único para ingestión de facturas."""
+
         filename = self._validate_filename(file.filename)
         extension = self._extract_extension(filename)
+
         self._ensure_supported_format(extension)
-        
+
         content = await self._read_and_validate_size(file)
         content_hash = self._compute_hash(content)
-        
-        parsed_invoice = await self._parse_if_applicable(content, extension, filename)
-        canonical_data = self._build_canonical_data(parsed_invoice, filename, extension)
-        
-        stored_invoice = await self._save_with_idempotency(
-            content_hash, filename, extension, canonical_data
+
+        parsed_invoice = await self._parse_if_applicable(
+            content,
+            extension,
+            filename,
         )
-        
+
+        canonical_data = self._build_canonical_data(
+            parsed_invoice,
+            filename,
+            extension,
+        )
+
+        stored_invoice = await self._save_with_idempotency(
+            content_hash,
+            filename,
+            extension,
+            canonical_data,
+        )
+
         return InvoiceIngestResult(
             invoice_id=str(stored_invoice.id),
             filename=filename,
@@ -142,53 +177,83 @@ class InvoiceService:
         requested_execution_date: str | None = None,
     ) -> SepaGenerateResult:
         """Genera un archivo SEPA pain.001 a partir de una factura ingestada."""
+
         from sqlalchemy import select
+
         from src.db.models import Invoice as InvoiceModel
-        from src.services.ap.sepa_generator import SepaGenerator, SepaGenerationError
-        from src.services.ap.validation.rules.iban_validator import validate_iban
+        from src.services.ap.sepa_generator import (
+            SepaGenerationError,
+            SepaGenerator,
+        )
+        from src.services.ap.validation.rules.iban_validator import (
+            validate_iban,
+        )
 
         result = await self.session.execute(
-            select(InvoiceModel).where(InvoiceModel.id == invoice_id)
+            select(InvoiceModel).where(
+                InvoiceModel.id == invoice_id
+            )
         )
+
         invoice = result.scalar_one_or_none()
 
         if not invoice:
-            raise InvoiceServiceError(f"Invoice {invoice_id} not found")
+            raise InvoiceServiceError(
+                f"Invoice {invoice_id} not found"
+            )
 
         canonical = invoice.canonical_data
+
         if not isinstance(canonical, dict):
-            raise InvoiceServiceError("Invoice canonical_data is not a valid object")
+            raise InvoiceServiceError(
+                "Invoice canonical_data is not a valid object"
+            )
 
         amount_raw = canonical.get("total_amount")
+
         if amount_raw is None:
-            raise InvoiceServiceError("Invoice missing total_amount in canonical_data")
+            raise InvoiceServiceError(
+                "Invoice missing total_amount in canonical_data"
+            )
 
         amount = Decimal(str(amount_raw))
+
         creditor_name = canonical.get("supplier_name")
         creditor_iban = canonical.get("creditor_iban")
         creditor_bic = canonical.get("creditor_bic")
+
         currency = canonical.get("currency", "EUR")
 
         if not creditor_iban:
             raise MissingIbanError(
-                "Invoice missing creditor_iban; cannot generate SEPA without payee account"
+                "Invoice missing creditor_iban; "
+                "cannot generate SEPA without payee account"
             )
 
         iban_result = validate_iban(creditor_iban)
+
         if not iban_result.is_valid:
-            raise MissingIbanError(f"Invalid creditor IBAN: {iban_result.error}")
+            raise MissingIbanError(
+                f"Invalid creditor IBAN: {iban_result.error}"
+            )
 
         execution_date = (
             date.fromisoformat(requested_execution_date)
             if requested_execution_date
             else date.today()
         )
-        payment_id = f"PAY-{hashlib.sha256(invoice_id.encode()).hexdigest()[:12].upper()}"
+
+        payment_id = (
+            f"PAY-"
+            f"{hashlib.sha256(invoice_id.encode()).hexdigest()[:12].upper()}"
+        )
 
         try:
             xml_bytes = SepaGenerator.generate(
                 message_id=payment_id,
-                creation_date_time=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                creation_date_time=datetime.now(
+                    timezone.utc
+                ).isoformat(timespec="seconds"),
                 initiating_party_name=debtor_name,
                 payment_info_id=f"{payment_id}-001",
                 requested_execution_date=execution_date,
@@ -196,15 +261,25 @@ class InvoiceService:
                 debtor_iban=debtor_iban,
                 debtor_bic=debtor_bic,
                 creditor_name=creditor_name or "Unknown Supplier",
-                creditor_iban=iban_result.normalized_iban or creditor_iban,
+                creditor_iban=(
+                    iban_result.normalized_iban
+                    or creditor_iban
+                ),
                 creditor_bic=creditor_bic,
                 amount=amount,
                 currency=currency,
             )
-        except SepaGenerationError as e:
-            raise InvoiceServiceError(f"SEPA generation failed: {e}")
 
-        logger.info(f"Generated SEPA payment {payment_id} for invoice {invoice_id}")
+        except SepaGenerationError as e:
+            raise InvoiceServiceError(
+                f"SEPA generation failed: {e}"
+            ) from e
+
+        logger.info(
+            "Generated SEPA payment %s for invoice %s",
+            payment_id,
+            invoice_id,
+        )
 
         return SepaGenerateResult(
             payment_id=payment_id,
@@ -212,59 +287,119 @@ class InvoiceService:
             xml_payload=xml_bytes.decode("utf-8"),
             amount=f"{amount:.2f}",
             currency=currency,
-            creditor_iban=iban_result.normalized_iban or creditor_iban,
-            generated_at=datetime.now(timezone.utc).isoformat(),
+            creditor_iban=(
+                iban_result.normalized_iban
+                or creditor_iban
+            ),
+            generated_at=datetime.now(
+                timezone.utc
+            ).isoformat(),
         )
 
     # ─── Métodos Privados ───
 
-    def _validate_filename(self, filename: str | None) -> str:
+    def _validate_filename(
+        self,
+        filename: str | None,
+    ) -> str:
         if not filename:
-            logger.warning("Rejected file: no filename provided")
-            raise MissingFilenameError("Filename is required")
+            logger.warning(
+                "Rejected file: no filename provided"
+            )
+
+            raise MissingFilenameError(
+                "Filename is required"
+            )
+
         return filename
 
     def _extract_extension(self, filename: str) -> str:
         return Path(filename).suffix.lower()
 
-    def _ensure_supported_format(self, extension: str) -> None:
+    def _ensure_supported_format(
+        self,
+        extension: str,
+    ) -> None:
         if extension not in self.ALLOWED_EXTENSIONS:
-            logger.warning(f"Rejected file: unsupported format {extension}")
-            raise UnsupportedFormatError(extension, list(self.ALLOWED_EXTENSIONS))
+            logger.warning(
+                "Rejected file: unsupported format %s",
+                extension,
+            )
 
-    async def _read_and_validate_size(self, file: UploadFile) -> bytes:
+            raise UnsupportedFormatError(
+                extension,
+                list(self.ALLOWED_EXTENSIONS),
+            )
+
+    async def _read_and_validate_size(
+        self,
+        file: UploadFile,
+    ) -> bytes:
         content = await file.read()
+
         if len(content) > self.MAX_SIZE_BYTES:
             logger.warning(
-                f"Rejected file {file.filename}: file size exceeds {self.MAX_SIZE_BYTES} bytes"
+                "Rejected file %s: file size exceeds %s bytes",
+                file.filename,
+                self.MAX_SIZE_BYTES,
             )
-            raise FileTooLargeError(len(content), self.MAX_SIZE_BYTES)
+
+            raise FileTooLargeError(
+                len(content),
+                self.MAX_SIZE_BYTES,
+            )
+
         return content
 
     def _compute_hash(self, content: bytes) -> str:
         return hashlib.sha256(content).hexdigest()
 
     async def _parse_if_applicable(
-        self, content: bytes, extension: str, filename: str
+        self,
+        content: bytes,
+        extension: str,
+        filename: str,
     ) -> ParsedInvoice | None:
         if extension != ".xml":
             return None
-        
+
         try:
-            return await run_in_threadpool(PeppolParser.parse, content)
+            return await run_in_threadpool(
+                PeppolParser.parse,
+                content,
+            )
+
         except ValueError as e:
-            logger.warning(f"XML parsing failed for {filename}: {str(e)}")
-            raise InvalidInvoiceError(f"XML invoice parsing failed: {str(e)}")
+            logger.warning(
+                "XML parsing failed for %s: %s",
+                filename,
+                str(e),
+            )
+
+            raise InvalidInvoiceError(
+                f"XML invoice parsing failed: {str(e)}"
+            ) from e
 
     def _build_canonical_data(
-        self, parsed_invoice: ParsedInvoice | None, filename: str, extension: str
+        self,
+        parsed_invoice: ParsedInvoice | None,
+        filename: str,
+        extension: str,
     ) -> dict:
         if parsed_invoice:
             return parsed_invoice.model_dump(mode="json")
-        return {"filename": filename, "source_format": extension.lstrip(".")}
+
+        return {
+            "filename": filename,
+            "source_format": extension.lstrip("."),
+        }
 
     async def _save_with_idempotency(
-        self, content_hash: str, filename: str, extension: str, canonical_data: dict
+        self,
+        content_hash: str,
+        filename: str,
+        extension: str,
+        canonical_data: dict,
     ):
         try:
             return await insert_invoice(
@@ -274,6 +409,14 @@ class InvoiceService:
                 source_format=extension.lstrip("."),
                 canonical_data=canonical_data,
             )
+
         except RepoDuplicateInvoiceError as e:
-            logger.info(f"Duplicate invoice detected: hash={e.raw_hash}")
-            raise DuplicateInvoiceError(e.raw_hash, str(e.existing_invoice_id)) from e
+            logger.info(
+                "Duplicate invoice detected: hash=%s",
+                e.raw_hash,
+            )
+
+            raise DuplicateInvoiceError(
+                e.raw_hash,
+                str(e.existing_invoice_id),
+            ) from e
