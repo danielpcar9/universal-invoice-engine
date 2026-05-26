@@ -1,26 +1,16 @@
-import hashlib
 import logging
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, UploadFile, status
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.concurrency import run_in_threadpool
 
 from src.api.dependencies.auth import verify_api_key
-from src.db.session import get_db_session
-from src.repositories.invoice_repository import (
-    DuplicateInvoiceError,
-    insert_invoice,
-)
-from src.services.ap.peppol_parser import PeppolParser, ParsedInvoice
+from src.api.dependencies.services import get_invoice_service
+from src.services.ap.peppol_parser import ParsedInvoice
+from src.services.invoice_service import InvoiceIngestResult, InvoiceService
 
 logger = logging.getLogger("api.invoices")
-
-ALLOWED_EXTENSIONS = {".xml", ".pdf", ".csv", ".xlsx"}
-MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
 
 
 class InvoiceIngestResponse(BaseModel):
@@ -46,106 +36,25 @@ router = APIRouter(
     summary="Ingest an Accounts Payable invoice",
 )
 async def ingest_invoice(
-    request: Request,
     file: Annotated[
         UploadFile,
         File(description="The invoice file to ingest (.xml, .pdf, .csv, .xlsx)"),
     ],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    service: Annotated[InvoiceService, Depends(get_invoice_service)],
 ) -> InvoiceIngestResponse:
-    filename = file.filename
-    if not filename:
-        logger.warning("Rejected file: no filename provided")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Filename is required",
-        )
-
-    ext = Path(filename).suffix.lower()
-
-    if ext not in ALLOWED_EXTENSIONS:
-        logger.warning(f"Rejected file {filename}: unsupported format {ext}")
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"Unsupported format: {ext}. Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}",
-        )
-
-    content_length = request.headers.get("content-length")
-    if content_length:
-        try:
-            if int(content_length) > MAX_SIZE_BYTES:
-                logger.warning(
-                    f"Rejected file {filename}: Content-Length exceeds 10MB limit "
-                    f"({content_length} bytes)"
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-                    detail=(
-                        f"Maximum allowed size is 10MB. "
-                        f"Got {int(content_length) / 1024 / 1024:.2f}MB"
-                    ),
-                )
-        except (ValueError, TypeError):
-            logger.warning(f"Malformed Content-Length header: {content_length}")
-
-    content = await file.read()
-    content_hash = hashlib.sha256(content).hexdigest()
-
-    if len(content) > MAX_SIZE_BYTES:
-        logger.warning(
-            f"Rejected file {filename}: file size exceeds 10MB limit ({len(content)} bytes)"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-            detail=f"Maximum allowed size is 10MB. Got {len(content) / 1024 / 1024:.2f}MB",
-        )
-
-    parsed_invoice = None
-    if ext == ".xml":
-        try:
-            parsed_invoice = await run_in_threadpool(PeppolParser.parse, content)
-        except ValueError as e:
-            logger.warning(f"XML parsing failed for {filename}: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"XML invoice parsing failed: {str(e)}",
-            )
-
-    canonical_data = (
-        parsed_invoice.model_dump(mode="json")
-        if parsed_invoice
-        else {"filename": filename, "source_format": ext.lstrip(".")}
-    )
-
-    try:
-        stored_invoice = await insert_invoice(
-            session,
-            raw_hash=content_hash,
-            filename=filename,
-            source_format=ext.lstrip("."),
-            canonical_data=canonical_data,
-        )
-    except DuplicateInvoiceError as e:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "message": "Invoice already ingested",
-                "raw_hash": e.raw_hash,
-                "existing_invoice_id": str(e.existing_invoice_id)
-                if e.existing_invoice_id
-                else None,
-            },
-        )
-
-    invoice_id = str(stored_invoice.id)
-    logger.info(f"Successfully ingested invoice {filename} with ID: {invoice_id}")
+    """
+    Ultra-thin router: only HTTP concerns.
+    All business logic (validation, parsing, persistence) delegated to InvoiceService.
+    Domain exceptions are translated to HTTP by global exception handlers in main.py.
+    """
+    result: InvoiceIngestResult = await service.ingest(file)
 
     return InvoiceIngestResponse(
-        invoice_id=invoice_id,
-        filename=filename,
-        size_bytes=len(content),
-        status="received",
-        received_at=datetime.now(timezone.utc),
-        parsed_invoice=parsed_invoice,
-        content_hash=content_hash,
+        invoice_id=result.invoice_id,
+        filename=result.filename,
+        size_bytes=result.size_bytes,
+        content_hash=result.content_hash,
+        status=result.status,
+        received_at=result.received_at,
+        parsed_invoice=result.parsed_invoice,
     )

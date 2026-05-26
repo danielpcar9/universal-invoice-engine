@@ -111,8 +111,8 @@ def test_ingest_duplicate_xml_returns_409():
         "/api/v1/ap/invoices/ingest", files=_invoice_upload_files(), headers=AUTH_HEADERS
     )
     assert duplicate_response.status_code == 409
-    detail = duplicate_response.json()["detail"]
-    assert detail["message"] == "Invoice already ingested"
+    detail = duplicate_response.json()
+    assert detail["detail"] == "Invoice already ingested"
     assert detail["raw_hash"] == content_hash
     assert detail["existing_invoice_id"] == first_invoice_id
 
@@ -146,7 +146,7 @@ def test_ingest_payload_too_large():
     )
     
     assert response.status_code == 413
-    assert "Maximum allowed size is 10MB" in response.json()["detail"]
+    assert "10MB" in response.json()["detail"]
 
 
 XXE_PAYLOAD = """<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><Invoice>&xxe;</Invoice>"""
