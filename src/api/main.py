@@ -10,6 +10,7 @@ from src.services.invoice_service import (
     FileTooLargeError,
     InvalidInvoiceError,
     UnsupportedFormatError,
+    MissingIbanError,
 )
 
 logging.basicConfig(
@@ -60,6 +61,18 @@ async def duplicate_invoice_handler(request: Request, exc: DuplicateInvoiceError
         status_code=status.HTTP_409_CONFLICT,
         content={
             "detail": "Invoice already ingested",
+            "raw_hash": exc.raw_hash,
+            "existing_invoice_id": exc.existing_invoice_id,
+        },
+    )
+
+@app.exception_handler(MissingIbanError)
+async def missing_iban_handler(request: Request, exc: MissingIbanError):
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content={"detail": str(exc)},
+        detail={
+            "detail": "Missing IBAN",
             "raw_hash": exc.raw_hash,
             "existing_invoice_id": exc.existing_invoice_id,
         },
