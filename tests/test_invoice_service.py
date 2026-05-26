@@ -1,11 +1,9 @@
 import io
-from decimal import Decimal
 
 import pytest
 from fastapi import UploadFile
 
 from src.db.session import AsyncSessionLocal
-from src.repositories.invoice_repository import DuplicateInvoiceError
 from src.services.invoice_service import (
     FileTooLargeError,
     InvoiceService,

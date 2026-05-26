@@ -2,7 +2,6 @@ import io
 from fastapi.testclient import TestClient
 from src.api.main import app
 
-from decimal import Decimal
 
 
 client = TestClient(app)

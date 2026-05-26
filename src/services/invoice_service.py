@@ -10,14 +10,12 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
-from src.db.models import Invoice
 from src.repositories.invoice_repository import (
     DuplicateInvoiceError,
     insert_invoice,
 )
 from src.services.ap.peppol_parser import ParsedInvoice, PeppolParser
 from src.services.ap.validation.rules.iban_validator import (
-    IbanValidationResult,
     validate_iban,
 )
 
