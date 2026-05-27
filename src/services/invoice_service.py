@@ -4,10 +4,12 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from fastapi import UploadFile
 from starlette.concurrency import run_in_threadpool
 
+from src.core.settings import invoice_settings
 from src.repositories.invoice_repository import (
     DuplicateInvoiceError as RepoDuplicateInvoiceError,
     insert_invoice,
@@ -15,6 +17,7 @@ from src.repositories.invoice_repository import (
 from src.services.ap.peppol_parser import ParsedInvoice, PeppolParser
 
 logger = logging.getLogger("services.invoice")
+CanonicalInvoiceData = dict[str, Any]
 
 
 # ─── Excepciones de Dominio ───
@@ -114,15 +117,6 @@ class InvoiceService:
     Orquesta todo el flujo de ingestión de facturas y generación SEPA.
     Contiene TODAS las reglas de negocio: formatos, tamaños, parsing.
     """
-
-    ALLOWED_EXTENSIONS = {
-        ".xml",
-        ".pdf",
-        ".csv",
-        ".xlsx",
-    }
-
-    MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
 
     def __init__(self, session):
         self.session = session
@@ -320,7 +314,7 @@ class InvoiceService:
         self,
         extension: str,
     ) -> None:
-        if extension not in self.ALLOWED_EXTENSIONS:
+        if extension not in invoice_settings.allowed_extensions:
             logger.warning(
                 "Rejected file: unsupported format %s",
                 extension,
@@ -328,7 +322,7 @@ class InvoiceService:
 
             raise UnsupportedFormatError(
                 extension,
-                list(self.ALLOWED_EXTENSIONS),
+                list(invoice_settings.allowed_extensions),
             )
 
     async def _read_and_validate_size(
@@ -337,16 +331,16 @@ class InvoiceService:
     ) -> bytes:
         content = await file.read()
 
-        if len(content) > self.MAX_SIZE_BYTES:
+        if len(content) > invoice_settings.max_size_bytes:
             logger.warning(
                 "Rejected file %s: file size exceeds %s bytes",
                 file.filename,
-                self.MAX_SIZE_BYTES,
+                invoice_settings.max_size_bytes,
             )
 
             raise FileTooLargeError(
                 len(content),
-                self.MAX_SIZE_BYTES,
+                invoice_settings.max_size_bytes,
             )
 
         return content
@@ -385,7 +379,7 @@ class InvoiceService:
         parsed_invoice: ParsedInvoice | None,
         filename: str,
         extension: str,
-    ) -> dict:
+    ) -> CanonicalInvoiceData:
         if parsed_invoice:
             return parsed_invoice.model_dump(mode="json")
 
@@ -399,7 +393,7 @@ class InvoiceService:
         content_hash: str,
         filename: str,
         extension: str,
-        canonical_data: dict,
+        canonical_data: CanonicalInvoiceData,
     ):
         try:
             return await insert_invoice(
