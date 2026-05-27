@@ -21,3 +21,8 @@ async def get_sepa_payment_service(
 ) -> SepaPaymentService:
     repository = SqlInvoiceRepository(session)
     return SepaPaymentService(repository)
+
+
+# Reusable dependency aliases for route signatures (skill recommendation)
+InvoiceServiceDep = Annotated[InvoiceService, Depends(get_invoice_service)]
+SepaPaymentServiceDep = Annotated[SepaPaymentService, Depends(get_sepa_payment_service)]

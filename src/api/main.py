@@ -14,9 +14,14 @@ from src.services.invoice_service import (
     DuplicateInvoiceError,
     FileTooLargeError,
     InvalidInvoiceError,
+    MissingFilenameError,
     UnsupportedFormatError,
 )
-from src.services.sepa_payment_service import MissingIbanError
+from src.services.sepa_payment_service import (
+    InvoiceNotFoundError,
+    MissingIbanError,
+    SepaPaymentServiceError,
+)
 
 setup_logging()
 logger = logging.getLogger("api")
@@ -67,44 +72,40 @@ async def add_request_id(request: Request, call_next):
     finally:
         request_id_var.reset(token)
 
-# ── Global exception handlers: domain → HTTP ──
-@app.exception_handler(UnsupportedFormatError)
-async def unsupported_format_handler(request: Request, exc: UnsupportedFormatError):
-    return JSONResponse(
-        status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-        content={"detail": str(exc)},
-    )
-
-@app.exception_handler(FileTooLargeError)
-async def file_too_large_handler(request: Request, exc: FileTooLargeError):
-    return JSONResponse(
-        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-        content={"detail": str(exc)},
-    )
-
-@app.exception_handler(InvalidInvoiceError)
-async def invalid_invoice_handler(request: Request, exc: InvalidInvoiceError):
-    return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-        content={"detail": str(exc)},
-    )
-
-@app.exception_handler(DuplicateInvoiceError)
-async def duplicate_invoice_handler(request: Request, exc: DuplicateInvoiceError):
-    return JSONResponse(
-        status_code=status.HTTP_409_CONFLICT,
-        content={
+# Declarative exception mapping: domain exception class -> (HTTP status code, optional custom response factory)
+_DOMAIN_ERROR_CONFIG: dict[type[Exception], int | tuple[int, callable]] = {
+    UnsupportedFormatError:  status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+    FileTooLargeError:       status.HTTP_413_CONTENT_TOO_LARGE,
+    InvalidInvoiceError:     status.HTTP_422_UNPROCESSABLE_CONTENT,
+    MissingFilenameError:    status.HTTP_422_UNPROCESSABLE_CONTENT,
+    MissingIbanError:        status.HTTP_422_UNPROCESSABLE_CONTENT,
+    InvoiceNotFoundError:    status.HTTP_404_NOT_FOUND,
+    SepaPaymentServiceError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    DuplicateInvoiceError: (
+        status.HTTP_409_CONFLICT,
+        lambda exc: {
             "detail": "Invoice already ingested",
             "raw_hash": exc.raw_hash,
-            "existing_invoice_id": exc.existing_invoice_id,
+            "existing_invoice_id": str(exc.existing_invoice_id) if exc.existing_invoice_id else None,
         },
-    )
-@app.exception_handler(MissingIbanError)
-async def missing_iban_handler(request: Request, exc: MissingIbanError):
-    return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-        content={"detail": str(exc)},
-    )
+    ),
+}
+
+
+def _make_domain_handler(config: int | tuple[int, callable]):
+    if isinstance(config, tuple):
+        status_code, content_factory = config
+    else:
+        status_code = config
+        content_factory = lambda exc: {"detail": str(exc)}
+
+    async def handler(request: Request, exc: Exception) -> JSONResponse:
+        return JSONResponse(status_code=status_code, content=content_factory(exc))
+    return handler
+
+
+for _exc_cls, _config in _DOMAIN_ERROR_CONFIG.items():
+    app.add_exception_handler(_exc_cls, _make_domain_handler(_config))
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:

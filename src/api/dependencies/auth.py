@@ -1,4 +1,6 @@
-from fastapi import Header, HTTPException, status
+from typing import Annotated
+
+from fastapi import Header, HTTPException, status, Depends
 
 
 async def verify_api_key(
@@ -15,3 +17,7 @@ async def verify_api_key(
             detail="Invalid API key",
         )
     return {"tenant_id": "placeholder", "api_key": x_api_key}
+
+
+# Reusable dependency alias for routes that need the tenant context
+TenantDep = Annotated[dict, Depends(verify_api_key)]

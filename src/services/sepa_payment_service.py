@@ -39,6 +39,12 @@ class MissingIbanError(SepaPaymentServiceError):
     pass
 
 
+class InvoiceNotFoundError(SepaPaymentServiceError):
+    """Raised when the requested invoice does not exist in the database."""
+    pass
+
+
+
 # ─── Servicio de Pagos SEPA ───
 
 
@@ -78,7 +84,7 @@ class SepaPaymentService:
         )
 
         if not invoice:
-            raise SepaPaymentServiceError(
+            raise InvoiceNotFoundError(
                 f"Invoice {invoice_id} not found"
             )
 

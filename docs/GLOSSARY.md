@@ -64,6 +64,8 @@ Example:
 POST /api/v1/ap/invoices/ingest
 ```
 
+See the ingest endpoint implementation at [src/api/routers/invoices.py](src/api/routers/invoices.py#L34).
+
 ### REST
 
 An API style where resources are exposed through URLs and HTTP methods.
@@ -125,6 +127,25 @@ In this project:
 Same invoice raw_hash already exists -> 409 Conflict
 ```
 
+Example HTTP 409 response (JSON):
+
+```json
+HTTP/1.1 409 Conflict
+Content-Type: application/json
+
+{
+    "detail": "Invoice with hash abc123... already exists",
+    "raw_hash": "abc123...",
+    "existing_invoice_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+}
+```
+
+Code pointers:
+
+> Repository error and mapping: `DuplicateInvoiceError` is raised in [src/repositories/invoice_repository.py](src/repositories/invoice_repository.py#L11) and handled/mapped to HTTP in [src/api/main.py](src/api/main.py#L58).
+
+See the exception handler at [src/api/main.py](src/api/main.py#L58-L66) for the exact response shape returned by the API.
+
 ### HTTP 422 Unprocessable Content
 
 Used when the file was accepted as input but cannot be parsed or validated as expected.
@@ -134,6 +155,21 @@ Example:
 ```text
 Malformed XML invoice -> 422
 ```
+
+Example HTTP 422 response (JSON):
+
+```json
+HTTP/1.1 422 Unprocessable Entity
+Content-Type: application/json
+
+{
+    "detail": "Malformed XML payload: Start tag expected, '<' not found"
+}
+```
+
+Code pointers:
+
+> XML parsing errors are raised as `ValueError` in [src/services/ap/peppol_parser.py](src/services/ap/peppol_parser.py#L94) and turned into `InvalidInvoiceError` in [src/services/invoice_service.py](src/services/invoice_service.py#L105), which the API maps to a 422 response.
 
 ### Rate Limiting
 
@@ -170,6 +206,10 @@ X-API-Key: sk_test_...
 Why this project uses an API key placeholder:
 
 > This is a backend-to-backend API. API keys are a simple first contract before adding tenants, DB-backed keys, and rotation.
+
+Code pointer:
+
+> The current placeholder API key verification and `tenant_id` placeholder live in [src/api/dependencies/auth.py](src/api/dependencies/auth.py#L17).
 
 ### OAuth 2.0
 
@@ -431,6 +471,10 @@ Why it matters:
 
 > It is the file fingerprint used for duplicate detection and auditability.
 
+Implementation note:
+
+> The `raw_hash` column is defined in [src/db/models.py](src/db/models.py#L22). Duplicate detection and insertion happen in the repository layer — see [src/repositories/invoice_repository.py](src/repositories/invoice_repository.py#L26) and the `DuplicateInvoiceError` class at [src/repositories/invoice_repository.py](src/repositories/invoice_repository.py#L11).
+
 ### UNIQUE Constraint
 
 A database rule that prevents duplicate values.
@@ -576,6 +620,11 @@ In plain terms:
 
 > A SEPA payment instruction file that a company can send/upload to a bank.
 
+Code pointers:
+
+- SEPA file generator implementation: [src/services/ap/sepa_generator.py](src/services/ap/sepa_generator.py#L13)
+- High-level SEPA orchestration: [src/services/sepa_payment_service.py](src/services/sepa_payment_service.py#L45)
+
 ### CAMT.054
 
 ISO 20022 bank notification message for account transactions.
@@ -703,6 +752,22 @@ rate limiting counters
 idempotency keys
 ```
 
+### DuplicateInvoiceError
+
+An application-level exception raised when an invoice with the same `raw_hash` already exists in the system.
+
+Why it matters:
+
+> Prevents storing the same invoice twice and helps signal idempotent/duplicate uploads to clients (mapped to HTTP 409 Conflict by the API).
+
+### Tenant / Tenant ID
+
+Logical isolation for customer data. The `tenant_id` is derived from the client's API key and scopes which invoices and resources the request can access.
+
+Why it matters:
+
+> Multi-tenant isolation prevents data leakage between customers and is the basis for billing, per-tenant quotas, and separate data lifecycles.
+
 ### Cache Failure
 
 When Redis/cache is unavailable.
@@ -710,6 +775,52 @@ When Redis/cache is unavailable.
 Design question:
 
 > Does the system fail closed, fail open, or degrade gracefully?
+
+### Peppol Parser
+
+The piece of code that reads PEPPOL/UBL XML and extracts payment-critical fields into an intermediate `ParsedInvoice` representation.
+
+Feynman version:
+
+> It reads the messy XML and hands a tidy Python object to the next step.
+
+Code pointers:
+
+- `ParsedInvoice` model: [src/services/ap/peppol_parser.py](src/services/ap/peppol_parser.py#L11)
+- Parser implementation: [src/services/ap/peppol_parser.py](src/services/ap/peppol_parser.py#L29)
+
+### ParsedInvoice
+
+An in-memory representation produced by the parser containing fields extracted from the source invoice (supplier, supplier IBAN, invoice number, totals, VAT lines, etc.).
+
+Why it matters:
+
+> It decouples XML parsing from canonicalization and business validation.
+
+### Canonical Invoice Data
+
+The normalized JSON object stored in the database under `canonical_data`. It contains a consistent set of fields the app relies on (e.g., `supplier_name`, `creditor_iban`, `total_amount`, `currency`, `invoice_id`).
+
+Why it matters:
+
+> A canonical representation makes downstream logic (deduplication, SEPA generation, reconciliation) simple and predictable across different invoice formats.
+
+Code pointers:
+
+- DB column storing canonical JSON: [src/db/models.py](src/db/models.py#L30)
+- Where canonical data is produced from parsed input: [src/services/invoice_service.py](src/services/invoice_service.py#L232)
+
+### Compliance Score
+
+A numeric score produced by lightweight validation rules (the "compliance scorer") that indicates how complete and payment-ready an invoice is for the project's requirements.
+
+Why it matters:
+
+> The score helps automate triage: high scores proceed to payment generation, low scores require manual review or rejection.
+
+Code pointer:
+
+> Score implementation and rules: [src/services/ap/validation/compliance_scorer.py](src/services/ap/validation/compliance_scorer.py#L65)
 
 For this MVP:
 
@@ -813,6 +924,11 @@ For the MVP:
 For future payment operations:
 
 > Add explicit `Idempotency-Key` support, especially for SEPA generation, because payment-related retries must not create duplicate side effects.
+
+Code pointers:
+
+- Where idempotent save/dedup is orchestrated: [src/services/invoice_service.py](src/services/invoice_service.py#L246)
+- Repository insertion (raises `DuplicateInvoiceError` on conflict): [src/repositories/invoice_repository.py](src/repositories/invoice_repository.py#L26)
 
 ### Idempotency-Key
 

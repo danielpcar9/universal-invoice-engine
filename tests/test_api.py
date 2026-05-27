@@ -294,3 +294,18 @@ def test_sepa_generate_missing_creditor_iban():
     )
     assert sepa.status_code == 422
     assert "missing creditor_iban" in sepa.json()["detail"]
+
+
+def test_sepa_generate_invoice_not_found():
+    payload = {
+        "invoice_id": "00000000-0000-0000-0000-000000000000",
+        "debtor_name": "My Company",
+        "debtor_iban": "ES7921000813610123456789",
+    }
+    response = client.post(
+        "/api/v1/ap/payments/sepa/generate",
+        json=payload,
+        headers=AUTH_HEADERS,
+    )
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"]
