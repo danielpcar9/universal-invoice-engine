@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
+from src.domain.ports.invoice_repository import InvoiceRepositoryProtocol
 from src.domain.value_objects.iban import IBAN
 
 logger = logging.getLogger("services.sepa_payment")
@@ -50,8 +51,11 @@ class SepaPaymentService:
     - Generar XML SEPA
     """
 
-    def __init__(self, session):
-        self.session = session
+    def __init__(
+        self,
+        invoice_repository: InvoiceRepositoryProtocol,
+    ):
+        self.invoice_repository = invoice_repository
 
     async def generate_sepa(
         self,
@@ -64,21 +68,14 @@ class SepaPaymentService:
     ) -> SepaGenerateResult:
         """Genera un archivo SEPA pain.001 a partir de una factura ingestada."""
 
-        from sqlalchemy import select
-
-        from src.db.models import Invoice as InvoiceModel
         from src.services.ap.sepa_generator import (
             SepaGenerationError,
             SepaGenerator,
         )
 
-        result = await self.session.execute(
-            select(InvoiceModel).where(
-                InvoiceModel.id == invoice_id
-            )
+        invoice = await self.invoice_repository.get_by_id(
+            invoice_id=invoice_id,
         )
-
-        invoice = result.scalar_one_or_none()
 
         if not invoice:
             raise SepaPaymentServiceError(

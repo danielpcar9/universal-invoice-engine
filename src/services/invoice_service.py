@@ -1,21 +1,22 @@
+from __future__ import annotations
+
 import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from fastapi import UploadFile
 from starlette.concurrency import run_in_threadpool
 from src.core.settings import invoice_settings
+from src.domain.ports.invoice_repository import InvoiceRepositoryProtocol
+from src.domain.types import CanonicalInvoiceData
 from src.repositories.invoice_repository import (
     DuplicateInvoiceError as RepoDuplicateInvoiceError,
-    insert_invoice,
 )
 from src.services.ap.peppol_parser import ParsedInvoice, PeppolParser
 
 logger = logging.getLogger("services.invoice")
-CanonicalInvoiceData = dict[str, Any]
 
 
 # ─── Excepciones de Dominio ───
@@ -98,8 +99,11 @@ class InvoiceService:
     Contiene TODAS las reglas de negocio: formatos, tamaños, parsing.
     """
 
-    def __init__(self, session):
-        self.session = session
+    def __init__(
+        self,
+        invoice_repository: InvoiceRepositoryProtocol,
+    ):
+        self.invoice_repository = invoice_repository
 
     async def ingest(self, file: UploadFile) -> InvoiceIngestResult:
         """Punto de entrada único para ingestión de facturas."""
@@ -247,8 +251,7 @@ class InvoiceService:
         canonical_data: CanonicalInvoiceData,
     ):
         try:
-            return await insert_invoice(
-                self.session,
+            return await self.invoice_repository.insert_invoice(
                 raw_hash=content_hash,
                 filename=filename,
                 source_format=extension.lstrip("."),

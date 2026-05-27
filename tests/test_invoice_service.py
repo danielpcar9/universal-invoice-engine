@@ -4,6 +4,7 @@ import pytest
 from fastapi import UploadFile
 
 from src.db.session import AsyncSessionLocal
+from src.repositories.sql_invoice_repository import SqlInvoiceRepository
 from src.services.invoice_service import (
     FileTooLargeError,
     InvoiceService,
@@ -19,13 +20,15 @@ from src.services.sepa_payment_service import (
 @pytest.fixture
 async def service():
     async with AsyncSessionLocal() as session:
-        yield InvoiceService(session)
+        repository = SqlInvoiceRepository(session)
+        yield InvoiceService(repository)
 
 
 @pytest.fixture
 async def sepa_service():
     async with AsyncSessionLocal() as session:
-        yield SepaPaymentService(session)
+        repository = SqlInvoiceRepository(session)
+        yield SepaPaymentService(repository)
 
 
 @pytest.mark.asyncio
