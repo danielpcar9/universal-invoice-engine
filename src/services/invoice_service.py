@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import UploadFile
 from starlette.concurrency import run_in_threadpool
-
+from src.domain.value_objects.iban import IBAN
 from src.core.settings import invoice_settings
 from src.repositories.invoice_repository import (
     DuplicateInvoiceError as RepoDuplicateInvoiceError,
@@ -179,9 +179,6 @@ class InvoiceService:
             SepaGenerationError,
             SepaGenerator,
         )
-        from src.services.ap.validation.rules.iban_validator import (
-            validate_iban,
-        )
 
         result = await self.session.execute(
             select(InvoiceModel).where(
@@ -224,12 +221,17 @@ class InvoiceService:
                 "cannot generate SEPA without payee account"
             )
 
-        iban_result = validate_iban(creditor_iban)
+        try:
+            creditor_iban_vo = IBAN(creditor_iban)
 
-        if not iban_result.is_valid:
+        except ValueError as e:
             raise MissingIbanError(
-                f"Invalid creditor IBAN: {iban_result.error}"
-            )
+                f"Invalid creditor IBAN: {e}"
+            ) from e
+        except Exception as e:
+            raise MissingIbanError(
+                f"IBAN validation failed: {e}"
+            ) from e
 
         execution_date = (
             date.fromisoformat(requested_execution_date)
@@ -255,10 +257,7 @@ class InvoiceService:
                 debtor_iban=debtor_iban,
                 debtor_bic=debtor_bic,
                 creditor_name=creditor_name or "Unknown Supplier",
-                creditor_iban=(
-                    iban_result.normalized_iban
-                    or creditor_iban
-                ),
+                creditor_iban=str(creditor_iban_vo),
                 creditor_bic=creditor_bic,
                 amount=amount,
                 currency=currency,
@@ -281,10 +280,7 @@ class InvoiceService:
             xml_payload=xml_bytes.decode("utf-8"),
             amount=f"{amount:.2f}",
             currency=currency,
-            creditor_iban=(
-                iban_result.normalized_iban
-                or creditor_iban
-            ),
+            creditor_iban=str(creditor_iban_vo),
             generated_at=datetime.now(
                 timezone.utc
             ).isoformat(),
