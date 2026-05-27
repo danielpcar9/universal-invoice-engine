@@ -309,3 +309,51 @@ def test_sepa_generate_invoice_not_found():
     )
     assert response.status_code == 404
     assert "not found" in response.json()["detail"]
+
+
+def test_unhandled_exception_production_vs_debug():
+    from src.api.dependencies.auth import verify_api_key
+    from fastapi.testclient import TestClient
+
+    local_client = TestClient(app, raise_server_exceptions=False)
+
+    def mock_verify_api_key():
+        raise RuntimeError("Generic DB/logic failure")
+
+    payload = {
+        "invoice_id": "00000000-0000-0000-0000-000000000000",
+        "debtor_name": "My Company",
+        "debtor_iban": "ES7921000813610123456789",
+    }
+
+    # 1. In standard/production-like execution, return general 500 without traceback
+    app.dependency_overrides[verify_api_key] = mock_verify_api_key
+    try:
+        response = local_client.post(
+            "/api/v1/ap/payments/sepa/generate",
+            json=payload,
+            headers=AUTH_HEADERS,
+        )
+        assert response.status_code == 500
+        assert response.json() == {"detail": "An unexpected error occurred in the server."}
+    finally:
+        app.dependency_overrides.clear()
+
+    # 2. In debug mode, return 500 with error details and traceback
+    app.dependency_overrides[verify_api_key] = mock_verify_api_key
+    from unittest.mock import patch
+    try:
+        with patch.dict("os.environ", {"DEBUG": "1"}):
+            response = local_client.post(
+                "/api/v1/ap/payments/sepa/generate",
+                json=payload,
+                headers=AUTH_HEADERS,
+            )
+            assert response.status_code == 500
+            data = response.json()
+            assert "detail" in data
+            assert data["error"] == "RuntimeError: Generic DB/logic failure"
+            assert "traceback" in data
+            assert isinstance(data["traceback"], list)
+    finally:
+        app.dependency_overrides.clear()

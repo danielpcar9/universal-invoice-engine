@@ -1,4 +1,5 @@
 import logging
+import os
 import uuid
 
 from dataclasses import dataclass
@@ -217,6 +218,18 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
         f"client={client_host}",
         exc_info=exc,
     )
+    # In development mode, we expose the exception type and traceback for easier debugging.
+    if request.app.debug or os.getenv("DEBUG") == "1":
+        import traceback
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "detail": "An unexpected error occurred in the server.",
+                "error": f"{type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exception(exc),
+            },
+        )
+
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "An unexpected error occurred in the server."},
