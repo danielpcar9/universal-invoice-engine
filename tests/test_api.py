@@ -311,7 +311,7 @@ def test_sepa_generate_invoice_not_found():
     assert "not found" in response.json()["detail"]
 
 
-def test_unhandled_exception_production_vs_debug():
+def test_unhandled_exception_remains_generic_always():
     from src.api.dependencies.auth import verify_api_key
     from fastapi.testclient import TestClient
 
@@ -339,7 +339,7 @@ def test_unhandled_exception_production_vs_debug():
     finally:
         app.dependency_overrides.clear()
 
-    # 2. In debug mode, return 500 with error details and traceback
+    # 2. Even in debug mode (DEBUG=1), the response MUST remain generic and NOT leak internal stack traces
     app.dependency_overrides[verify_api_key] = mock_verify_api_key
     from unittest.mock import patch
     try:
@@ -350,10 +350,6 @@ def test_unhandled_exception_production_vs_debug():
                 headers=AUTH_HEADERS,
             )
             assert response.status_code == 500
-            data = response.json()
-            assert "detail" in data
-            assert data["error"] == "RuntimeError: Generic DB/logic failure"
-            assert "traceback" in data
-            assert isinstance(data["traceback"], list)
+            assert response.json() == {"detail": "An unexpected error occurred in the server."}
     finally:
         app.dependency_overrides.clear()
