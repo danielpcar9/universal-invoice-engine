@@ -8,8 +8,11 @@ from src.services.invoice_service import (
     FileTooLargeError,
     InvoiceService,
     InvalidInvoiceError,
-    MissingIbanError,
     UnsupportedFormatError,
+)
+from src.services.sepa_payment_service import (
+    MissingIbanError,
+    SepaPaymentService,
 )
 
 
@@ -17,6 +20,12 @@ from src.services.invoice_service import (
 async def service():
     async with AsyncSessionLocal() as session:
         yield InvoiceService(session)
+
+
+@pytest.fixture
+async def sepa_service():
+    async with AsyncSessionLocal() as session:
+        yield SepaPaymentService(session)
 
 
 @pytest.mark.asyncio
@@ -84,7 +93,7 @@ async def test_ingest_malformed_xml(service: InvoiceService):
 
 
 @pytest.mark.asyncio
-async def test_generate_sepa_missing_iban(service: InvoiceService):
+async def test_generate_sepa_missing_iban(service: InvoiceService, sepa_service: SepaPaymentService):
     # First ingest invoice without PaymentMeans
     file = UploadFile(
         filename="no_iban.xml",
@@ -116,7 +125,7 @@ async def test_generate_sepa_missing_iban(service: InvoiceService):
     invoice_id = result.invoice_id
 
     with pytest.raises(MissingIbanError, match="missing creditor_iban"):
-        await service.generate_sepa(
+        await sepa_service.generate_sepa(
             invoice_id=invoice_id,
             debtor_name="MyCo",
             debtor_iban="ES7921000813610123456789",

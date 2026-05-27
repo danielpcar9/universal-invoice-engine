@@ -10,8 +10,8 @@ from src.services.invoice_service import (
     FileTooLargeError,
     InvalidInvoiceError,
     UnsupportedFormatError,
-    MissingIbanError,
 )
+from src.services.sepa_payment_service import MissingIbanError
 
 logging.basicConfig(
     level=logging.INFO,

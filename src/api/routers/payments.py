@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
 
 from src.api.dependencies.auth import verify_api_key
-from src.api.dependencies.services import get_invoice_service
-from src.services.invoice_service import InvoiceService, SepaGenerateResult
+from src.api.dependencies.services import get_sepa_payment_service
+from src.services.sepa_payment_service import SepaPaymentService, SepaGenerateResult
 
 logger = logging.getLogger("api.payments")
 
@@ -42,7 +42,7 @@ class SepaGenerateResponse(BaseModel):
 )
 async def generate_sepa(
     body: SepaGenerateRequest,
-    service: Annotated[InvoiceService, Depends(get_invoice_service)],
+    service: Annotated[SepaPaymentService, Depends(get_sepa_payment_service)],
 ) -> SepaGenerateResponse:
     result: SepaGenerateResult = await service.generate_sepa(
         invoice_id=body.invoice_id,
