@@ -4,10 +4,13 @@ import os
 os.environ["TESTING"] = "1"
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import delete
 
+from src.core.settings import invoice_settings
 from src.db.models import Invoice
-from src.db.session import AsyncSessionLocal, create_database_schema, engine
+from src.db.session import AsyncSessionLocal, engine
 
 
 @pytest.fixture(scope="session")
@@ -19,7 +22,10 @@ def event_loop():
 
 @pytest.fixture(scope="session", autouse=True)
 def ensure_database_schema(event_loop) -> None:
-    event_loop.run_until_complete(create_database_schema())
+    os.environ.setdefault("DATABASE_URL", invoice_settings.database_url)
+    alembic_cfg = Config("alembic.ini")
+    alembic_cfg.set_main_option("script_location", "alembic")
+    command.upgrade(alembic_cfg, "head")
     event_loop.run_until_complete(engine.dispose())
 
 

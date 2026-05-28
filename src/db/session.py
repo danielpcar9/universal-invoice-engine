@@ -8,10 +8,9 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://uie_app:uie_password@localhost:5432/universal_invoice_engine",
-)
+from src.core.settings import invoice_settings
+
+DATABASE_URL = invoice_settings.database_url
 
 _engine_kwargs: dict = {"pool_pre_ping": True}
 if os.getenv("TESTING") == "1":
