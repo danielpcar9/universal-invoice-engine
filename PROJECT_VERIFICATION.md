@@ -152,9 +152,7 @@ SELECT id, canonical_data FROM invoices LIMIT 1 \gx
 ### Supporting materials:
 - `DEMO_GUIDE.md` — Structured demo script (25–30 min)
 - `README.md` — Problem/solution overview
-- `docs/GLOSSARY.md` — Terminology with code links
 - `docs/architecture.md` — Architecture diagrams and rationale
-- `docs/DB_LAYER_FEYNMAN.md` — Database design explanation
 
 ---
 

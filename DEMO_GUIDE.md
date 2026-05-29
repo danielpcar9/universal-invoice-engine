@@ -327,9 +327,7 @@ src/
 └── core/             # Configuration (settings)
 
 docs/
-├── architecture.md   # Architecture diagrams and rationale
-├── GLOSSARY.md       # Terminology and design concepts
-└── DB_LAYER_FEYNMAN.md  # Database design explanation
+└── architecture.md   # Architecture diagrams and rationale
 ```
 
 **CTO point:**
