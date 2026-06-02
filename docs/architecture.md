@@ -1,203 +1,163 @@
-# Architecture of Universal Invoice Engine
+# Architecture
 
-## Overview
+Universal Invoice Engine is a focused backend engine for European AP automation. It ingests invoices, extracts canonical data, stores that data idempotently, and generates SEPA payment XML.
 
-Universal Invoice Engine is an API-first backend designed to automate invoice ingestion and SEPA payment generation for European AP workflows.
+It is not a full accounting platform. It is the backend engine that could sit inside one.
 
-This document describes:
+## System Boundary
 
-- architectural layers
-- request → domain → persistence flow
-- ports and adapters
-- value objects
-- idempotency
-- canonical invoice ingestion
-- SEPA generation
-- service separation
-- AI-native readiness
-- design tradeoffs
-
-## Architectural Style
-
-The system follows a modular monolith architecture:
-
-- clear bounded responsibilities
-- isolated application services
-- domain-oriented modules
-- a single deployable unit
-
-This keeps operational complexity low while preserving scalability paths.
+```mermaid
+flowchart TB
+    External[Client / AP operator] --> API[FastAPI API]
+    API --> InvoiceSvc[InvoiceService]
+    API --> PaymentSvc[SepaPaymentService]
+    InvoiceSvc --> Parser[PEPPOL parser]
+    InvoiceSvc --> RepoPort[InvoiceRepositoryProtocol]
+    PaymentSvc --> RepoPort
+    PaymentSvc --> Iban[IBAN value object]
+    PaymentSvc --> Sepa[SEPA generator]
+    SqlRepo[SqlInvoiceRepository] -. implements .-> RepoPort
+    SqlRepo --> DB[(PostgreSQL)]
+    Alembic[Alembic migrations] --> DB
+```
 
 ## Layers
 
 ```mermaid
 flowchart TB
-    subgraph Layer[Application Layers]
-        API[API Layer\nFastAPI routers and HTTP boundary]
-        App[Application Services\nInvoiceService / SepaPaymentService]
-        Domain[Domain Layer\nValue objects, canonical types, business rules]
-        Ports[Ports\nDomain/application contracts]
-        Adapters[Adapters\nSqlInvoiceRepository / SQLAlchemy]
-        Persistence[Persistence Layer\nPostgreSQL JSONB invoices]
-    end
+    API[API layer\nrouters, dependencies, HTTP errors]
+    Services[Application services\nuse-case orchestration]
+    Domain[Domain layer\nvalue objects, canonical types]
+    Ports[Ports\nrepository contracts]
+    Adapters[Infrastructure adapters\nSQLAlchemy repository]
+    Persistence[Persistence\nPostgreSQL + JSONB + Alembic]
 
-    API --> App
-    App --> Domain
-    Domain --> Ports
-    Ports --> Adapters
+    API --> Services
+    Services --> Domain
+    Services --> Ports
+    Adapters -. implement .-> Ports
     Adapters --> Persistence
 ```
 
-### Layer responsibilities
+### API Layer
 
-- **API Layer**: thin HTTP boundary with request validation and response serialization.
-- **Application Services**: orchestrate business workflows without infrastructure details.
-- **Domain Layer**: contains business rules, canonical models and validations.
-- **Ports**: define the contracts required by the application and domain layers.
-- **Adapters**: provide infrastructure-specific implementations for those contracts.
-- **Persistence Layer**: stores invoices and canonical payloads in PostgreSQL/JSONB.
+- owns HTTP routes, request parsing, and response models
+- keeps business rules out of routers
+- translates domain exceptions into HTTP responses
 
-## Bounded contexts
+### Application Services
 
-The system implicitly models the following bounded contexts:
+- `InvoiceService` handles ingestion, validation, parsing, canonicalization, and persistence
+- `SepaPaymentService` loads stored invoice data and generates payment XML
+- services coordinate workflows but avoid direct SQLAlchemy calls
 
-- Invoice ingestion
-- Payment generation
-- Validation
-- Persistence
+### Domain
 
-## Ingestion flow
+- `InvoiceRepositoryProtocol` defines the persistence contract needed by services
+- `IBAN` validates and normalizes account numbers before payment generation
+- canonical invoice data provides a stable shape for downstream workflows
 
-```mermaid
-flowchart LR
-    U[Upload XML / file] --> V[Validate filename + extension]
-    V --> S[Validate file size]
-    S --> H[Compute SHA-256 raw hash]
-    H --> P[Parse PEPPOL XML if applicable]
-    P --> C[Build canonical_data]
-    C --> D[Idempotency check + persist]
-    D --> R[Return ingest result]
-```
+### Adapters and Persistence
 
-### Ingestion details
+- `SqlInvoiceRepository` adapts the repository protocol to SQLAlchemy
+- `Invoice` is the PostgreSQL model
+- `canonical_data` is stored as JSONB
+- Alembic owns schema migrations
 
-1. `POST /api/v1/ap/invoices/ingest` receives the uploaded file.
-2. `InvoiceService.ingest` validates filename, extension, and size.
-3. The raw file content is hashed with SHA-256 for idempotency.
-4. If the file is `.xml`, it is parsed as PEPPOL BIS 3.0.
-5. `canonical_data` is built from parsed invoice values or minimal metadata.
-6. The invoice is persisted with a unique `raw_hash`.
-7. If the same hash already exists, the repository raises `DuplicateInvoiceError`.
-
-## SEPA payment flow
+## Ingestion Flow
 
 ```mermaid
-flowchart LR
-    I[Invoice ID] --> L[Load invoice from repository]
-    L --> V[Validate canonical_data + amount]
-    V --> B[Validate creditor IBAN]
-    B --> G[Generate pain.001 SEPA XML]
-    G --> R[Return payment payload]
+sequenceDiagram
+    participant C as Client
+    participant API as FastAPI Router
+    participant S as InvoiceService
+    participant P as PEPPOL Parser
+    participant R as Repository
+    participant DB as PostgreSQL
+
+    C->>API: POST /ap/invoices/ingest
+    API->>S: ingest(file)
+    S->>S: validate filename, extension, size
+    S->>S: compute SHA-256 raw_hash
+    S->>P: parse XML
+    P-->>S: ParsedInvoice
+    S->>R: insert_invoice(raw_hash, canonical_data)
+    R->>DB: INSERT invoices
+    DB-->>R: stored invoice
+    R-->>S: stored invoice
+    S-->>API: InvoiceIngestResult
+    API-->>C: 201 Created
 ```
 
-### Payment details
+Duplicate uploads are rejected by the unique `raw_hash` constraint. The repository translates that database conflict into a repository error, and `InvoiceService` translates it into a service-level duplicate error.
 
-1. `POST /api/v1/ap/payments/sepa/generate` receives the payment request.
-2. `SepaPaymentService.generate_sepa` loads the invoice by `invoice_id`.
-3. The service validates `canonical_data`, `total_amount` and `creditor_iban`.
-4. `IBAN` is a value object that validates and normalizes bank account data.
-5. If valid, the service generates ISO 20022 `pain.001.001.03` XML.
+## SEPA Flow
 
-## Ports and adapters
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant API as FastAPI Router
+    participant S as SepaPaymentService
+    participant R as Repository
+    participant I as IBAN
+    participant G as SepaGenerator
 
-- `InvoiceRepositoryProtocol` is the domain/application contract.
-- `SqlInvoiceRepository` is the infrastructure adapter that implements it.
-- Ports belong to the domain/application side.
-- Adapters belong to the infrastructure side.
-
-This is a practical hexagonal architecture: application logic depends on abstractions, not on SQLAlchemy directly.
-
-## Why JSONB?
-
-The invoice data model stores canonical invoice payloads in `canonical_data` as JSONB.
-
-This was chosen because:
-
-- invoices vary significantly by source
-- canonical schemas evolve over time
-- PEPPOL and custom formats can diverge
-- JSONB enables flexible ingestion without destructive migrations
-
-It supports a stable persistence contract while allowing the canonical data shape to grow.
-
-## Value objects
-
-### `IBAN`
-
-- defined in `src/domain/value_objects/iban.py`
-- validates IBAN format with `stdnum`
-- normalizes spacing and casing
-- protects payment generation with a strict bank account contract
-
-### `canonical_data`
-
-- canonical JSON representation of invoice metadata
-- designed to be:
-  - consistent
-  - auditable
-  - consumable by downstream systems
-  - suitable for AI ingestion pipelines
-- common fields: `invoice_id`, `supplier_name`, `customer_name`, `total_amount`, `creditor_iban`, `currency`
+    C->>API: POST /ap/payments/sepa/generate
+    API->>S: generate_sepa(invoice_id, debtor account)
+    S->>R: get_by_id(invoice_id)
+    R-->>S: Invoice
+    S->>S: validate canonical_data and amount
+    S->>I: validate creditor_iban
+    I-->>S: normalized IBAN
+    S->>G: generate pain.001 XML
+    G-->>S: XML bytes
+    S-->>API: SepaGenerateResult
+    API-->>C: 201 Created
+```
 
 ## Idempotency
 
-Idempotency is enforced using `raw_hash`:
+Idempotency is enforced with two layers:
 
-- SHA-256 of the raw uploaded bytes is computed in `InvoiceService._compute_hash`
-- `raw_hash` is unique in the `invoices` table
-- database integrity failure is translated to `DuplicateInvoiceError`
+- application layer computes `raw_hash = sha256(raw_bytes)`
+- database layer enforces a unique index on `invoices.raw_hash`
 
-This makes duplicates a database-level guarantee rather than a race-prone application check.
+The database is the source of truth. This avoids race-prone duplicate checks when multiple API instances exist.
 
-## Why separate `InvoiceService` and `SepaPaymentService`?
+## Schema Management
 
-- `InvoiceService` handles ingestion, validation and canonicalization.
-- `SepaPaymentService` handles invoice loading, payment validation and SEPA generation.
-- Separation of concerns reduces coupling and gives each service a single reason to change.
-- It enables smaller unit tests and clearer extension paths (OCR, multi-payment rails, payment rules).
+Alembic tracks schema evolution. The initial migration creates:
 
-## Design tradeoffs
+- `invoices.id`
+- `invoices.raw_hash`
+- `invoices.filename`
+- `invoices.source_format`
+- `invoices.canonical_data`
+- `invoices.status`
+- timestamps
+- unique index on `raw_hash`
 
-- Simplicity over premature distribution
-- Modular monolith over microservices
-- JSONB flexibility over rigid schema enforcement
-- Explicit domain services over fat routers
-- Synchronous processing for MVP simplicity
+Useful commands:
 
-## What this system solves
+```bash
+uv run alembic upgrade head
+uv run alembic current
+uv run alembic check
+```
 
-- secure invoice ingestion for European B2B workflows
-- early validation of format, size and invoice structure
-- canonicalization of PEPPOL and mixed invoice sources
-- SEPA payment file generation for downstream banking systems
-- a clean path from document to executed payment intent
+## Design Tradeoffs
 
-## AI-native readiness
+- **Synchronous processing** keeps the MVP simple, but heavy PDF/OCR parsing should move to background jobs.
+- **JSONB canonical data** avoids premature schema rigidity, but important query fields may eventually deserve dedicated columns.
+- **API key placeholder** is enough for local demo, but production needs real key management or OAuth2/JWT.
+- **Single deployable service** is easier to operate now; clear boundaries make future extraction possible if volume requires it.
 
-The system is designed for AI-native finance operations because:
+## Production Evolution
 
-- `canonical_data` is normalized and structured
-- the ingestion boundary produces consistent financial objects
-- downstream AI workflows can consume a stable schema
-- separation of ingestion and persistence enables enrichment before payment
+The most natural next steps are:
 
-> In an AI-fintech pipeline, `canonical_data` is the junction where heterogeneous invoices become downstream-ready financial objects.
-
-## Roadmap
-
-- async ingestion queue for non-XML sources and file processing
-- OCR + extraction for PDFs and unstructured invoices
-- vendor enrichment and normalization with AI
-- anomaly detection for suspicious invoices
-- entity deduplication and supplier normalization
-- stateful orchestration for multi-stage payment flows
+1. invoice status workflow and audit events
+2. background workers for heavy parsing
+3. tenant-aware API keys and data isolation
+4. stricter PEPPOL/EN16931 compliance checks
+5. raw file storage outside the relational database

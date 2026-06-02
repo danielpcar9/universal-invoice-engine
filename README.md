@@ -1,112 +1,164 @@
 # Universal Invoice Engine
 
-Backend API-first for Accounts Payable automation with PEPPOL invoice ingestion and SEPA payment generation.
+Backend API for European accounts payable automation: ingest PEPPOL invoices, normalize them into canonical data, prevent duplicate ingestion, and generate SEPA `pain.001` payment XML.
 
-## Problem statement
+This is intentionally a focused backend engine, not a full ERP or accounting SaaS.
 
-European finance teams receive invoices in mixed formats and need a reliable way to:
+## What It Solves
 
-- ingest invoices safely,
-- normalize data consistently,
-- prevent duplicate invoice ingestion,
-- generate SEPA payment files for bank processing.
+Finance teams receive invoices from multiple sources and need a reliable path from document intake to payment preparation:
 
-## What this project does
-
-- accepts invoice files through `POST /api/v1/ap/invoices/ingest`
-- parses PEPPOL XML into a canonical invoice model
-- persists invoice metadata and canonical payloads in PostgreSQL JSONB
-- enforces idempotency via raw file hashing
-- generates ISO 20022 `pain.001` SEPA XML from ingested invoices
-
-## Why this architecture matters
-
-This repository is intentionally designed as a modular monolith, not as a distributed system full of unrelated services.
-
-### Core architectural patterns
-
-- **Thin API boundary**: FastAPI routers delegate business rules to services.
-- **Application services**: `InvoiceService` and `SepaPaymentService` orchestrate domain flows.
-- **Ports & Adapters**: `InvoiceRepositoryProtocol` defines domain contracts while `SqlInvoiceRepository` provides the infrastructure implementation.
-- **Value objects**: `IBAN` encapsulates bank account validation and normalization.
-- **Canonical data**: `canonical_data` normalizes invoices into a stable shape for downstream systems.
-
-## High-level architecture
-
-- `src/api/routers`: HTTP endpoints with request validation and response models.
-- `src/services/invoice_service.py`: invoice ingestion, validation, parsing, and persistence orchestration.
-- `src/services/sepa_payment_service.py`: invoice loading, payment validation, and SEPA XML generation.
-- `src/domain/value_objects`: domain value objects such as IBAN.
-- `src/domain/ports`: repository contracts required by the application.
-- `src/repositories/sql_invoice_repository.py`: PostgreSQL/SQLAlchemy persistence adapter.
-- `src/db/models.py`: invoice database model with unique `raw_hash`.
-
-See `docs/architecture.md` for architecture diagrams and flow details.
-
-## Why PEPPOL + SEPA
-
-- **PEPPOL** is the European standard for electronic B2B invoicing.
-- **SEPA** is the standard for euro credit transfers.
-
-This project covers a real financing workflow: converting invoice data into executable payment instructions.
-
-## Design tradeoffs
-
-- Simplicity over premature distribution
-- Modular monolith over microservices
-- JSONB flexibility over rigid schema enforcement
-- Explicit domain services over fat routers
-- Synchronous processing for MVP simplicity
-
-## Why JSONB?
-
-- invoices vary significantly by source
-- canonical schemas evolve over time
-- PEPPOL and custom formats may diverge
-- JSONB enables flexible ingestion without destructive migrations
-
-This is a fintech-real choice: store a stable reference payload while allowing the invoice model to adapt.
-
-## Local development
-
-1. Create and activate virtual environment
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e .
+```text
+Invoice upload
+-> PEPPOL parsing
+-> Canonical invoice data
+-> PostgreSQL persistence
+-> Duplicate protection
+-> SEPA payment generation
 ```
 
-2. Run the application
+## Implemented Scope
 
-```bash
-uvicorn src.api.main:app --reload
+- `POST /api/v1/ap/invoices/ingest` for invoice ingestion
+- PEPPOL/UBL XML parsing into a canonical invoice model
+- PostgreSQL persistence with JSONB `canonical_data`
+- SHA-256 raw file hash for idempotency
+- Unique database constraint on `raw_hash`
+- SEPA `pain.001.001.03` XML generation from stored invoice data
+- IBAN validation and normalization
+- Alembic migration setup with an initial `invoices` table migration
+- FastAPI error handling for duplicate, invalid, unsupported, and missing invoice cases
+
+## Architecture
+
+The project uses a modular monolith with a practical ports-and-adapters boundary.
+
+```mermaid
+flowchart TB
+    Client[Client / AP system] --> API[API layer\nFastAPI routers]
+    API --> Services[Application services\nInvoiceService / SepaPaymentService]
+    Services --> Domain[Domain layer\nTypes, value objects, validation]
+    Services --> Ports[Ports\nInvoiceRepositoryProtocol]
+    Ports --> Repo[Adapter\nSqlInvoiceRepository]
+    Repo --> DB[(PostgreSQL\ninvoices + JSONB)]
+    Services --> PEPPOL[PEPPOL parser]
+    Services --> SEPA[SEPA generator]
 ```
 
-3. Run tests
+### Key Decisions
 
-```bash
-pytest
+- **Modular monolith over microservices**: simpler deployment and debugging for an MVP while keeping clear internal boundaries.
+- **Thin routers**: HTTP code delegates workflow decisions to services.
+- **Repository port**: services depend on `InvoiceRepositoryProtocol`, not directly on SQLAlchemy.
+- **Database-backed idempotency**: duplicate protection is enforced by PostgreSQL, not only by an application pre-check.
+- **JSONB canonical payload**: flexible enough for evolving invoice formats without over-modeling every field on day one.
+- **Alembic migrations**: schema evolution is versioned and demonstrable.
+
+## End-to-End Flow
+
+### Invoice Ingestion
+
+```text
+Upload file
+-> validate filename, extension, and size
+-> compute SHA-256 hash
+-> parse PEPPOL XML
+-> build canonical_data
+-> insert invoice
+-> return invoice_id and parsed invoice data
 ```
 
-## AI-native narrative
+If the same raw file is uploaded again, the unique `raw_hash` constraint triggers a domain-level duplicate response.
 
-The system is designed for AI-native finance operations because:
+### SEPA Generation
 
-- `canonical_data` is normalized and structured
-- the ingestion pipeline produces consistent financial objects
-- downstream AI workflows can consume a stable schema
-- separation of ingestion and persistence enables enrichment before payment
+```text
+Receive invoice_id + debtor account
+-> load invoice from repository
+-> validate canonical_data
+-> validate creditor IBAN
+-> generate ISO 20022 pain.001 XML
+-> return payment payload
+```
 
-## Roadmap
+## Local Development
 
-- async ingestion queue for PDF/CSV and large files
-- OCR + extraction for unstructured invoices
-- AI-based vendor enrichment and normalization
-- anomaly detection for suspicious invoices
-- supplier/entity deduplication
-- stateful orchestration for multi-stage payment flows
+Start PostgreSQL:
 
-## Learn more
+```bash
+docker-compose up -d postgres
+```
 
-- `docs/architecture.md`
+Apply migrations:
+
+```bash
+uv run alembic upgrade head
+```
+
+Run the API:
+
+```bash
+uv run uvicorn src.api.main:app --reload
+```
+
+Run checks:
+
+```bash
+uv run ruff check .
+uv run pytest
+uv run alembic check
+```
+
+## Useful Demo Commands
+
+Health check:
+
+```bash
+curl http://127.0.0.1:8000/api/v1/health
+```
+
+Ingest an invoice:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/ap/invoices/ingest \
+  -H "X-API-Key: demo-api-key" \
+  -F "file=@/tmp/invoice.xml"
+```
+
+Generate SEPA:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/ap/payments/sepa/generate \
+  -H "X-API-Key: demo-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "invoice_id": "<invoice_id>",
+    "debtor_name": "My Company S.L.",
+    "debtor_iban": "ES7921000813610123456789",
+    "debtor_bic": "BBVAESMM",
+    "requested_execution_date": "2026-06-15"
+  }'
+```
+
+## Tradeoffs
+
+- Processing is synchronous for MVP clarity.
+- Authentication is intentionally a placeholder API-key dependency.
+- There is no dashboard, tenant model, OCR pipeline, or full ERP accounting module.
+- PEPPOL parsing is implemented for the current tested invoice shape, not every jurisdiction-specific validation rule.
+
+## Production Evolution
+
+The next production-oriented steps would be:
+
+- background jobs for heavier parsing workloads
+- explicit invoice workflow states and audit events
+- stronger API key management or OAuth2/JWT
+- tenant isolation
+- deeper PEPPOL/EN16931 compliance validation
+- object storage for raw invoice files
+
+## Documentation
+
+- `docs/architecture.md` - system layers, flows, and design rationale
+- `DEMO_GUIDE.md` - short walkthrough for presenting the project
